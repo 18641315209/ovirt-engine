@@ -28,7 +28,7 @@ public class DateEnumValueAutoCompleterTest {
     @Test
     public void testConvertFieldEnumValueToActualValue() {
         // Dates should return dates
-        String test = "01/20/1972";
+        String test = "";
         String expected = test;
         assertEquals(test, expected, comp.convertFieldEnumValueToActualValue(test));
 
