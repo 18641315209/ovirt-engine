@@ -240,6 +240,10 @@ public class FeatureSupported {
         return supportedInConfig(ConfigValues.ContentType, version);
     }
 
+    public static boolean isIsoOnDataDomainSupported(Version version) {
+        return supportedInConfig(ConfigValues.IsoOnDataDomain, version);
+    }
+
     public static boolean isDefaultRouteReportedByVdsm(Version version) {
         return supportedInConfig(ConfigValues.DefaultRouteReportedByVdsm, version);
     }
@@ -262,5 +266,13 @@ public class FeatureSupported {
      */
     public static boolean getImageTicketSupported(Version version) {
         return supportedInConfig(ConfigValues.GetImageTicketSupported, version);
+    }
+
+    /**
+     * @param version Compatibility version to check for.
+     * @return {@code true} if getting an LLDP information from vdsm is supported for this version.
+     */
+    public static boolean isLlldpInformationSupported(Version version) {
+        return supportedInConfig(ConfigValues.LldpInformationSupported, version);
     }
 }

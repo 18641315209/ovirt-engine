@@ -1,7 +1,6 @@
 package org.ovirt.engine.core.bll;
 
-import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 
 import javax.ejb.EJB;
@@ -142,7 +141,7 @@ public class HostedEngineImporter {
         Guid sdProfileId = diskProfileDao.getAllForStorageDomain(sd.getId()).get(0).getId();
         for (DiskImage image : vm.getImages()) {
             image.setDiskProfileId(sdProfileId);
-            image.setStorageIds(new ArrayList(Arrays.asList(sd.getId())));
+            image.setStorageIds(Collections.singletonList(sd.getId()));
             image.setVmSnapshotId(Guid.newGuid());
             image.setImageStatus(ImageStatus.OK);
         }
@@ -155,9 +154,7 @@ public class HostedEngineImporter {
         vm.setClusterArch(cluster.getArchitecture());
         vm.setVmCreationDate(new Date());
         vm.setMigrationSupport(MigrationSupport.IMPLICITLY_NON_MIGRATABLE);
-        vm.setVmOs(osRepository.getLinuxOss().stream()
-                .sorted()
-                .findFirst().get());
+        osRepository.getLinuxOss().stream().sorted().findFirst().ifPresent(vm::setVmOs);
         vm.setPriority(1);
 
         vmHandler.updateDefaultTimeZone(vm.getStaticData());

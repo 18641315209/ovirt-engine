@@ -6,7 +6,6 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
@@ -100,10 +99,15 @@ public class ImportVmTemplateFromConfigurationCommand<T extends ImportVmTemplate
 
     @Override
     protected boolean validate() {
+        initVmTemplate();
+        if (!super.validate()) {
+            return false;
+        }
         if (!validateExternalVnicProfileMapping()) {
             return false;
         }
-        initVmTemplate();
+        drMappingHelper.mapVnicProfiles(vmTemplateFromConfiguration.getInterfaces(),
+                getParameters().getExternalVnicProfileMappings());
         ArrayList<DiskImage> disks = new ArrayList(getVmTemplate().getDiskTemplateMap().values());
         setImagesWithStoragePoolId(getStorageDomain().getStoragePoolId(), disks);
         getVmTemplate().setImages(disks);
@@ -111,7 +115,7 @@ public class ImportVmTemplateFromConfigurationCommand<T extends ImportVmTemplate
                 !validateUnregisteredEntity(vmTemplateFromConfiguration, ovfEntityData)) {
             return false;
         }
-        return super.validate();
+        return true;
     }
 
     private boolean validateExternalVnicProfileMapping() {
@@ -132,11 +136,10 @@ public class ImportVmTemplateFromConfigurationCommand<T extends ImportVmTemplate
 
         ImportValidator importValidator = new ImportValidator(getParameters());
 
-        // Avoid from sending imageToDestinationDomainMap because it isn't initialized at this point
         if (!validate(importValidator.validateDiskNotAlreadyExistOnDB(
                 getImages(),
                 getParameters().isAllowPartialImport(),
-                null,
+                imageToDestinationDomainMap,
                 failedDisksToImportForAuditLog))) {
             return false;
         }
@@ -201,7 +204,6 @@ public class ImportVmTemplateFromConfigurationCommand<T extends ImportVmTemplate
                     mapCluster(fullEntityOvfData);
                 }
                 vmTemplateFromConfiguration.setClusterId(getParameters().getClusterId());
-                drMappingHelper.mapVnicProfiles(vmTemplateFromConfiguration.getInterfaces(), getParameters().getExternalVnicProfileMappings());
                 setVmTemplate(vmTemplateFromConfiguration);
                 setEffectiveCompatibilityVersion(CompatibilityVersionUtils.getEffective(getVmTemplate(), this::getCluster));
                 vmHandler.updateMaxMemorySize(getVmTemplate(), getEffectiveCompatibilityVersion());
@@ -261,9 +263,8 @@ public class ImportVmTemplateFromConfigurationCommand<T extends ImportVmTemplate
 
     @Override
     public void executeCommand() {
-        addAuditLogForPartialVMs();
-        filterInvalidDisksForImport();
         super.executeCommand();
+        addAuditLogForPartialVMs();
         if (getParameters().isImagesExistOnTargetStorageDomain()) {
             if (!getImages().isEmpty()) {
                 findAndSaveDiskCopies();
@@ -276,14 +277,6 @@ public class ImportVmTemplateFromConfigurationCommand<T extends ImportVmTemplate
         }
         setActionReturnValue(getVmTemplate().getId());
         setSucceeded(true);
-    }
-
-    // Filter out disks that cannot be imported due to the partial import flag
-    private void filterInvalidDisksForImport() {
-        getVmTemplate().setImages(getVmTemplate().getImages()
-                .stream()
-                .filter(diskImage -> !failedDisksToImportForAuditLog.containsKey(diskImage.getId()))
-                .collect(Collectors.toCollection(ArrayList::new)));
     }
 
     private void addAuditLogForPartialVMs() {

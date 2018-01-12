@@ -18,6 +18,7 @@ import org.ovirt.engine.ui.uicommonweb.dataprovider.AsyncDataProvider;
 import org.ovirt.engine.ui.uicommonweb.models.clusters.ClusterNetworkManageModel;
 import org.ovirt.engine.ui.uicommonweb.models.clusters.ClusterNetworkModel;
 import org.ovirt.engine.ui.webadmin.ApplicationConstants;
+import org.ovirt.engine.ui.webadmin.ApplicationMessages;
 import org.ovirt.engine.ui.webadmin.ApplicationResources;
 import org.ovirt.engine.ui.webadmin.ApplicationTemplates;
 import org.ovirt.engine.ui.webadmin.gin.AssetProvider;
@@ -49,6 +50,7 @@ public class ClusterManageNetworkPopupView extends AbstractModelBoundPopupView<C
     private static final ApplicationTemplates templates = AssetProvider.getTemplates();
     private static final ApplicationResources resources = AssetProvider.getResources();
     private static final ApplicationConstants constants = AssetProvider.getConstants();
+    private static final ApplicationMessages messages = AssetProvider.getMessages();
 
     protected static final int MAX_CLUSTER_NETWORK_GRID_HEIGHT = 253;
 
@@ -85,7 +87,6 @@ public class ClusterManageNetworkPopupView extends AbstractModelBoundPopupView<C
     }
 
     private void initEntityModelCellTable() {
-        networks.enableColumnResizing();
         boolean multiCluster = networks.asEditor().flush().isMultiCluster();
 
         networks.addColumn(new NetworkNameTextColumnWithTooltip(), constants.nameNetwork(), "85px"); //$NON-NLS-1$
@@ -104,29 +105,29 @@ public class ClusterManageNetworkPopupView extends AbstractModelBoundPopupView<C
 
         networks.addColumn(
                 new ManagementNetworkIndicatorCheckboxColumn(multiCluster, new ManagementNetworkIndicatorFieldUpdater()),
-                constants.managementItemInfo(), "80px"); //$NON-NLS-1$
+                constants.managementItemInfo(), "100px"); //$NON-NLS-1$
 
         networks.addColumn(
                 new DisplayNetworkIndicatorCheckboxColumn(multiCluster,
                         new DisplayNetworkIndicatorFieldUpdater()),
                 new SafeHtmlHeader(SafeHtmlUtils.fromSafeConstant(constants.displayNetwork()),
                         SafeHtmlUtils.fromSafeConstant(constants.changeDisplayNetworkWarning())),
-                "100px"); //$NON-NLS-1$
+                "120px"); //$NON-NLS-1$
 
         networks.addColumn(
                 new MigrationNetworkIndicatorCheckboxColumn(multiCluster,
                         new MigrationNetworkIndicatorFieldUpdater()),
-                constants.migrationNetwork(), "105px"); //$NON-NLS-1$
+                constants.migrationNetwork(), "125px"); //$NON-NLS-1$
 
         networks.addColumn(
                 new GlusterNetworkIndicatorCheckboxColumn(multiCluster,
                         new GlusterNetworkIndicatorFieldUpdater()),
-                constants.glusterNetwork(), "100px"); //$NON-NLS-1$
+                constants.glusterNetwork(), "120px"); //$NON-NLS-1$
 
         networks.addColumn(
                 new DefaultRouteNetworkIndicatorCheckboxColumn(
                         multiCluster, new DefaultRouteNetworkIndicatorFieldUpdater()),
-                constants.defaultRouteNetwork(), "100px"); //$NON-NLS-1$
+                constants.defaultRouteNetwork(), "120px"); //$NON-NLS-1$
     }
 
     @Override
@@ -473,6 +474,17 @@ public class ClusterManageNetworkPopupView extends AbstractModelBoundPopupView<C
                     && (!isMultipleSelectionAllowed()
                     || !clusterNetworkModel.isManagement()
                     || !clusterNetworkModel.getOriginalNetworkCluster().isDefaultRoute());
+        }
+
+        @Override
+        protected String getDisabledMessage(ClusterNetworkModel clusterNetworkModel) {
+            String version = clusterNetworkModel.getCluster().getCompatibilityVersion().getValue();
+            boolean defaultRouteReportedByVdsm = (Boolean) AsyncDataProvider.getInstance().getConfigValuePreConverted(
+                    ConfigValues.DefaultRouteReportedByVdsm, version);
+            if (!defaultRouteReportedByVdsm) {
+                return messages.clusterDefaultRouteCompatibility(version);
+            }
+            return super.getDisabledMessage(clusterNetworkModel);
         }
     }
 

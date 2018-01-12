@@ -22,8 +22,11 @@ import org.ovirt.engine.core.common.businessentities.UsbControllerModel;
 import org.ovirt.engine.core.common.businessentities.VmDevice;
 import org.ovirt.engine.core.common.businessentities.VmDeviceGeneralType;
 import org.ovirt.engine.core.common.businessentities.network.VmNetworkInterface;
+import org.ovirt.engine.core.common.businessentities.storage.DiskImage;
 import org.ovirt.engine.core.common.businessentities.storage.DiskLunMap;
+import org.ovirt.engine.core.common.utils.VmDeviceType;
 import org.ovirt.engine.core.compat.Guid;
+import org.ovirt.engine.core.dao.DiskImageDao;
 import org.ovirt.engine.core.dao.DiskLunMapDao;
 import org.ovirt.engine.core.dao.HostDeviceDao;
 import org.ovirt.engine.core.dao.VmDeviceDao;
@@ -31,8 +34,10 @@ import org.ovirt.engine.core.dao.network.VmNetworkInterfaceDao;
 import org.ovirt.engine.core.utils.MemoizingSupplier;
 import org.ovirt.engine.core.utils.ovf.xml.XmlAttribute;
 import org.ovirt.engine.core.utils.ovf.xml.XmlDocument;
+import org.ovirt.engine.core.utils.ovf.xml.XmlNamespaceManager;
 import org.ovirt.engine.core.utils.ovf.xml.XmlNode;
 import org.ovirt.engine.core.utils.ovf.xml.XmlNodeList;
+import org.ovirt.engine.core.vdsbroker.builder.vminfo.LibvirtVmXmlBuilder;
 import org.ovirt.engine.core.vdsbroker.vdsbroker.VdsProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +53,8 @@ public class VmDevicesConverter {
     private VmNetworkInterfaceDao vmNetworkInterfaceDao;
     @Inject
     private DiskLunMapDao diskLunMapDao;
+    @Inject
+    private DiskImageDao diskImageDao;
 
     protected final Logger log = LoggerFactory.getLogger(getClass());
 
@@ -60,26 +67,55 @@ public class VmDevicesConverter {
     private static final String DEVICES_START_ELEMENT = "<devices>";
     private static final String DEVICES_END_ELEMENT = "</devices>";
 
-    private MemoizingSupplier<Map<Map<String, String>, HostDevice>> addressToHostDeviceSupplier;
 
     public Map<String, Object> convert(Guid vmId, Guid hostId, String xml) throws Exception {
-        addressToHostDeviceSupplier = new MemoizingSupplier<>(() -> hostDeviceDao.getHostDevicesByHostId(hostId)
-                .stream()
-                .filter(device -> !device.getAddress().isEmpty())
-                .collect(Collectors.toMap(HostDevice::getAddress, device -> device)));
         String devicesXml = xml.substring(
                 xml.indexOf(DEVICES_START_ELEMENT),
                 xml.indexOf(DEVICES_END_ELEMENT) + DEVICES_END_ELEMENT.length());
         XmlDocument document = new XmlDocument(devicesXml);
+        XmlNode metadata = new XmlDocument(xml).selectSingleNode("domain/metadata");
         Map<String, Object> result = new HashMap<>();
         result.put(VdsProperties.vm_guid, vmId.toString());
         result.put(VdsProperties.Devices, parseDevices(vmId, hostId, document));
+        result.put(VdsProperties.GuestDiskMapping, parseDiskMapping(metadata));
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseDiskMapping(XmlNode metadata) throws Exception {
+        if (metadata == null) {
+            return null;
+        }
+        XmlNamespaceManager xmlNS = new XmlNamespaceManager();
+        xmlNS.addNamespace(LibvirtVmXmlBuilder.OVIRT_VM_PREFIX, LibvirtVmXmlBuilder.OVIRT_VM_URI);
+        XmlNode vm = metadata.selectSingleNode("ovirt-vm:vm", xmlNS);
+        if (vm == null) {
+            return null;
+        }
+        Map<String, Object> result = new HashMap<>();
+        for (XmlNode node : vm.selectNodes("ovirt-vm:device", xmlNS)) {
+            if (!VmDeviceGeneralType.DISK.getValue().equals(parseAttribute(node, "devtype"))) {
+                continue;
+            }
+
+            XmlNode guestNameNode = node.selectSingleNode("ovirt-vm:guestName", xmlNS);
+            if (guestNameNode != null) {
+                // guest disk mapping is not available for LUNs at the moment
+                result.put(node.selectSingleNode("ovirt-vm:imageID", xmlNS).innerText,
+                        Collections.singletonMap(VdsProperties.Name, guestNameNode.innerText));
+            }
+        }
         return result;
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object>[] parseDevices(Guid vmId, Guid hostId, XmlDocument document) throws Exception {
         List<VmDevice> devices = vmDeviceDao.getVmDeviceByVmId(vmId);
+        MemoizingSupplier<Map<Map<String, String>, HostDevice>> addressToHostDeviceSupplier =
+                new MemoizingSupplier<>(() -> hostDeviceDao.getHostDevicesByHostId(hostId)
+                        .stream()
+                        .filter(device -> !device.getAddress().isEmpty())
+                        .collect(Collectors.toMap(HostDevice::getAddress, device -> device)));
 
         List<Map<String, Object>> result = new ArrayList<>();
         result.add(parseBalloon(document, devices)); // memballoon
@@ -91,12 +127,12 @@ public class VmDevicesConverter {
         result.addAll(parseChannels(document, devices));
         result.addAll(parseControllers(document, devices));
         result.addAll(parseVideos(document, devices));
-        result.addAll(parseInterfaces(document, devices, vmId));
+        result.addAll(parseInterfaces(document, devices, vmId, addressToHostDeviceSupplier));
         result.addAll(parseDisks(document, devices));
         result.addAll(parseRedirs(document, devices));
         result.addAll(parseMemories(document, devices));
-        result.addAll(parseManagedHostDevices(document, devices, hostId));
-        result.addAll(parseUnmanagedHostDevices(document, devices, hostId));
+        result.addAll(parseManagedHostDevices(document, devices, hostId, addressToHostDeviceSupplier));
+        result.addAll(parseUnmanagedHostDevices(document, devices, hostId, addressToHostDeviceSupplier));
         return result.stream()
                 .filter(map -> !map.isEmpty())
                 .toArray(Map[]::new);
@@ -238,7 +274,8 @@ public class VmDevicesConverter {
         return String.valueOf(intKbValue / 1024);
     }
 
-    private List<Map<String, Object>> parseUnmanagedHostDevices(XmlDocument document, List<VmDevice> devices, Guid hostId) {
+    private List<Map<String, Object>> parseUnmanagedHostDevices(XmlDocument document, List<VmDevice> devices,
+            Guid hostId, MemoizingSupplier<Map<Map<String, String>, HostDevice>> addressToHostDeviceSupplier) {
         List<VmDevice> dbDevices = filterDevices(devices, VmDeviceGeneralType.HOSTDEV);
 
         List<Map<String, Object>> result = new ArrayList<>();
@@ -277,7 +314,8 @@ public class VmDevicesConverter {
      * with one of the devices of the host. Host devices that were designed to be added as
      * unmanaged devices, like mdev devices, are handled separately.
      */
-    private List<Map<String, Object>> parseManagedHostDevices(XmlDocument document, List<VmDevice> devices, Guid hostId) {
+    private List<Map<String, Object>> parseManagedHostDevices(XmlDocument document, List<VmDevice> devices, Guid hostId,
+            MemoizingSupplier<Map<Map<String, String>, HostDevice>> addressToHostDeviceSupplier) {
         List<VmDevice> dbDevices = filterDevices(devices, VmDeviceGeneralType.HOSTDEV);
         if (dbDevices.isEmpty()) {
             return Collections.emptyList();
@@ -365,25 +403,7 @@ public class VmDevicesConverter {
             dev.put(VdsProperties.Alias, parseAlias(node));
 
             String path = parseDiskPath(node);
-            VmDevice dbDev = dbDevices.stream()
-                    .filter(d -> {
-                        switch(diskType) {
-                        case "cdrom":
-                            if (!diskType.equals(d.getDevice())) {
-                                return false;
-                            }
-                            String devicePath = (String) d.getSpecParams().get("path");
-                            return devicePath == null || path.contains(devicePath);
-                        case "floppy":
-                            return diskType.equals(d.getDevice());
-                        default:
-                            Guid diskId = d.getId().getDeviceId();
-                            return path.contains(diskId.toString()) ||
-                                    isPathContainsLunIdOfDisk(path, diskId, diskToLunSupplier);
-                        }
-                    })
-                    .findFirst()
-                    .orElse(null);
+            VmDevice dbDev = findDiskDeviceInDbByPath(dbDevices, diskType, path, diskToLunSupplier);
 
             if (dbDev == null) {
                 log.warn("unmanaged disk with path '{}' is ignored", path);
@@ -406,13 +426,41 @@ public class VmDevicesConverter {
         return result;
     }
 
+    private VmDevice findDiskDeviceInDbByPath(List<VmDevice> dbDevices, String diskType, String path,
+            MemoizingSupplier<Map<Guid, String>> diskToLunSupplier) {
+        return dbDevices.stream()
+                .filter(d -> {
+                    switch(diskType) {
+                    case "cdrom":
+                        if (!diskType.equals(d.getDevice())) {
+                            return false;
+                        }
+                        String devicePath = (String) d.getSpecParams().get("path");
+                        return devicePath == null || path.contains(devicePath);
+                    case "floppy":
+                        return diskType.equals(d.getDevice());
+                    default:
+                        if (d.getSnapshotId() != null && path.contains(VdsProperties.Transient)) {
+                            DiskImage diskImage =  diskImageDao.getDiskSnapshotForVmSnapshot(d.getDeviceId(), d.getSnapshotId());
+                            return diskImage != null && path.contains(diskImage.getImageId().toString());
+                        }
+                        Guid diskId = d.getId().getDeviceId();
+                        return path.contains(diskId.toString()) ||
+                                isPathContainsLunIdOfDisk(path, diskId, diskToLunSupplier);
+                    }
+                })
+                .findFirst()
+                .orElse(null);
+    }
+
     private boolean isPathContainsLunIdOfDisk(String path, Guid diskId,
             MemoizingSupplier<Map<Guid, String>> diskToLunSupplier) {
         String lunId = diskToLunSupplier.get().get(diskId);
         return lunId != null && path.contains(lunId);
     }
 
-    private List<Map<String, Object>> parseInterfaces(XmlDocument document, List<VmDevice> devices, Guid vmId) {
+    private List<Map<String, Object>> parseInterfaces(XmlDocument document, List<VmDevice> devices, Guid vmId,
+            MemoizingSupplier<Map<Map<String, String>, HostDevice>> addressToHostDeviceSupplier) {
         List<VmDevice> dbDevices = filterDevices(devices, VmDeviceGeneralType.INTERFACE);
         Map<Guid, VmDevice> devIdToDbDev = dbDevices.stream().collect(Collectors.toMap(
                 device -> device.getId().getDeviceId(),
@@ -421,9 +469,15 @@ public class VmDevicesConverter {
         List<VmNetworkInterface> dbInterfaces = vmNetworkInterfaceDao.getAllForVm(vmId);
         List<Map<String, Object>> result = new ArrayList<>();
         for (XmlNode node : selectNodes(document, VmDeviceGeneralType.INTERFACE)) {
+            String type = parseAttribute(node, TYPE);
             Map<String, Object> dev = new HashMap<>();
+
+            if (VmDeviceType.HOST_DEVICE.getName().equals(type)) {
+                dev.put(VdsProperties.HostDev, getHostDeviceName(node, addressToHostDeviceSupplier));
+            }
+
             dev.put(VdsProperties.Type, VmDeviceGeneralType.INTERFACE.getValue());
-            dev.put(VdsProperties.Device, parseAttribute(node, TYPE));
+            dev.put(VdsProperties.Device, type);
             dev.put(VdsProperties.Address, parseAddress(node));
             dev.put(VdsProperties.Alias, parseAlias(node));
 
@@ -446,6 +500,19 @@ public class VmDevicesConverter {
             result.add(dev);
         }
         return result;
+    }
+
+    private String getHostDeviceName(XmlNode hostDevInterfaceNode,
+            MemoizingSupplier<Map<Map<String, String>, HostDevice>> addressToHostDeviceSupplier) {
+        Map<String, String> hostAddress = parseHostAddress(hostDevInterfaceNode);
+        if (hostAddress == null) {
+            return null;
+        }
+        HostDevice hostDevice = addressToHostDeviceSupplier.get().get(hostAddress);
+        if (hostDevice == null) {
+            return null;
+        }
+        return hostDevice.getDeviceName();
     }
 
     private List<Map<String, Object>> parseVideos(XmlDocument document, List<VmDevice> devices) {

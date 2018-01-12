@@ -30,6 +30,7 @@ import org.ovirt.engine.ui.uicommonweb.models.ConfirmationModel;
 import org.ovirt.engine.ui.uicommonweb.models.EntityModel;
 import org.ovirt.engine.ui.uicommonweb.models.HasEntity;
 import org.ovirt.engine.ui.uicommonweb.models.ListWithSimpleDetailsModel;
+import org.ovirt.engine.ui.uicommonweb.models.SearchStringMapping;
 import org.ovirt.engine.ui.uicommonweb.models.configure.PermissionListModel;
 import org.ovirt.engine.ui.uicommonweb.models.quota.ChangeQuotaItemModel;
 import org.ovirt.engine.ui.uicommonweb.models.quota.ChangeQuotaModel;
@@ -230,7 +231,7 @@ public class DiskListModel extends ListWithSimpleDetailsModel<Void, Disk> {
         setTitle(ConstantsManager.getInstance().getConstants().disksTitle());
         setApplicationPlace(WebAdminApplicationPlaces.diskMainPlace);
 
-        setDefaultSearchString("Disks: disk_type = image"); //$NON-NLS-1$
+        setDefaultSearchString(SearchStringMapping.DISKS_DEFAULT_SEARCH + ": disk_type = image"); //$NON-NLS-1$
         setSearchString(getDefaultSearchString());
         setSearchObjects(new String[] { SearchObjects.DISK_OBJ_NAME, SearchObjects.DISK_PLU_OBJ_NAME });
         setAvailableInModes(ApplicationMode.VirtOnly);
@@ -488,6 +489,9 @@ public class DiskListModel extends ListWithSimpleDetailsModel<Void, Disk> {
         Frontend.getInstance().runMultipleAction(ActionType.RemoveDisk, parameterList,
                 result -> {
                     DiskListModel localModel = (DiskListModel) result.getState();
+                    if (result.getReturnValue().stream().anyMatch(rv -> !rv.isValid())) {
+                        restorePreviousSelectedItem();
+                    }
                     localModel.stopProgress();
                     cancel();
                 },

@@ -125,6 +125,12 @@ class Plugin(plugin.PluginBase):
 
         self.logger.info(_('Adding default OVN provider to database'))
 
+        password = (
+            self._encrypt_password(self._password)
+            if self._password
+            else None
+        )
+
         self.environment[
             oenginecons.EngineDBEnv.STATEMENT
         ].execute(
@@ -151,7 +157,7 @@ class Plugin(plugin.PluginBase):
                 provider_type='EXTERNAL_NETWORK',
                 auth_required=auth_required,
                 auth_username=self._user,
-                auth_password=self._password,
+                auth_password=password,
                 custom_properties=None,
                 plugin_type='OVIRT_PROVIDER_OVN',
                 auth_url='https://%s:35357/v2.0/' % fqdn
@@ -697,10 +703,10 @@ class Plugin(plugin.PluginBase):
     @plugin.event(
         stage=plugin.Stages.STAGE_CUSTOMIZATION,
         before=(
-            osetupcons.Stages.DISTRO_RPM_PACKAGE_UPDATE_CHECK,
+            osetupcons.Stages.DIALOG_TITLES_E_PRODUCT_OPTIONS,
         ),
         after=(
-            osetupcons.Stages.DIALOG_TITLES_S_PACKAGES,
+            osetupcons.Stages.DIALOG_TITLES_S_PRODUCT_OPTIONS,
         ),
     )
     def _customization(self):

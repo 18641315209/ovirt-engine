@@ -6,6 +6,7 @@ import javax.inject.Inject;
 
 import org.ovirt.engine.core.bll.context.CommandContext;
 import org.ovirt.engine.core.bll.utils.PermissionSubject;
+import org.ovirt.engine.core.bll.validator.QuotaValidator;
 import org.ovirt.engine.core.common.action.QuotaCRUDParameters;
 import org.ovirt.engine.core.common.businessentities.Quota;
 import org.ovirt.engine.core.common.businessentities.QuotaCluster;
@@ -38,6 +39,11 @@ public abstract class QuotaCRUDCommand extends CommandBase<QuotaCRUDParameters> 
     }
 
     @Override
+    protected void init() {
+        fillQuotaParameter();
+    }
+
+    @Override
     protected boolean validate() {
         Quota quota = getParameters().getQuota();
 
@@ -47,15 +53,14 @@ public abstract class QuotaCRUDCommand extends CommandBase<QuotaCRUDParameters> 
             return false;
         }
 
-        // Check if quota name exists or
-        // If specific Quota for storage is specified or
-        // If specific Quota for cluster is specific
-        return validateQuotaNameIsUnique(quota) &&
-                validateQuotaStorageLimitation(quota) &&
-                validateQuotaClusterLimitation(quota);
+        QuotaValidator quotaValidator = QuotaValidator.createInstance(quota, false);
+
+        // Validate quota and check if the name already exists
+        return validate(quotaValidator.isValid()) &&
+                validateQuotaNameIsUnique(quota);
     }
 
-    public boolean validateQuotaNameIsUnique(Quota quota) {
+    private boolean validateQuotaNameIsUnique(Quota quota) {
         Quota quotaByName = quotaDao.getQuotaByQuotaName(quota.getQuotaName(), quota.getStoragePoolId());
 
         // Check if there is no quota with the same name that already exists.
@@ -67,48 +72,67 @@ public abstract class QuotaCRUDCommand extends CommandBase<QuotaCRUDParameters> 
     }
 
     /**
-     * Validate Quota storage restrictions.
+     * Fills missing data in the quota parameter
      */
-    private boolean validateQuotaStorageLimitation(Quota quota) {
-        boolean isValid = true;
-        List<QuotaStorage> quotaStorageList = quota.getQuotaStorages();
-        if (quota.isGlobalStorageQuota() && (quotaStorageList != null && !quotaStorageList.isEmpty())) {
-            addValidationMessage(EngineMessage.ACTION_TYPE_FAILED_QUOTA_LIMIT_IS_SPECIFIC_AND_GENERAL);
-            isValid = false;
-        }
-        return isValid;
+    private void fillQuotaParameter() {
+        Quota quotaParameter = getParameters().getQuota();
+
+        setQuotaStorage(quotaParameter);
+        setQuotaCluster(quotaParameter);
+        setQuotaThresholdDefaults(quotaParameter);
     }
 
-    /**
-     * Validate Quota vds group restrictions.
-     *
-     * @param quota
-     *            - Quota we validate
-     * @return Boolean value if the quota is valid or not.
-     */
-    private boolean validateQuotaClusterLimitation(Quota quota) {
-        boolean isValid = true;
-        List<QuotaCluster> quotaClusterList = quota.getQuotaClusters();
-        if (quotaClusterList != null && !quotaClusterList.isEmpty()) {
-            boolean isSpecificVirtualCpu = false;
-            boolean isSpecificVirtualRam = false;
-
-            for (QuotaCluster quotaCluster : quotaClusterList) {
-                isSpecificVirtualCpu = quotaCluster.getVirtualCpu() != null;
-                isSpecificVirtualRam = quotaCluster.getMemSizeMB() != null;
-            }
-
-            // if the global vds group limit was not specified, then specific limitation must be specified.
-            if (quota.isGlobalClusterQuota() && (isSpecificVirtualRam || isSpecificVirtualCpu)) {
-                addValidationMessage(EngineMessage.ACTION_TYPE_FAILED_QUOTA_LIMIT_IS_SPECIFIC_AND_GENERAL);
-                isValid = false;
-            }
+    private void setQuotaStorage(Quota quota) {
+        // Create unlimited global storage quota if no other is specified
+        if (quota.isEmptyStorageQuota()) {
+            quota.setGlobalQuotaStorage(new QuotaStorage(Guid.newGuid(),
+                    quota.getId(),
+                    null,
+                    -1L,
+                    0.0));
+            return;
         }
-        return isValid;
+
+        if (quota.isGlobalStorageQuota()) {
+            quota.getGlobalQuotaStorage().setQuotaId(quota.getId());
+            quota.getGlobalQuotaStorage().setQuotaStorageId(Guid.newGuid());
+            return;
+        }
+
+        for (QuotaStorage quotaStorage : quota.getQuotaStorages()) {
+            quotaStorage.setQuotaId(quota.getId());
+            quotaStorage.setQuotaStorageId(Guid.newGuid());
+        }
+    }
+
+    private void setQuotaCluster(Quota quota) {
+        // Create unlimited global cluster quota if no other is specified
+        if (quota.isEmptyClusterQuota()) {
+            quota.setGlobalQuotaCluster(new QuotaCluster(Guid.newGuid(),
+                    quota.getId(),
+                    null,
+                    -1,
+                    0,
+                    -1L,
+                    0L));
+
+            return;
+        }
+
+        if (quota.isGlobalClusterQuota()) {
+            quota.getGlobalQuotaCluster().setQuotaId(quota.getId());
+            quota.getGlobalQuotaCluster().setQuotaClusterId(Guid.newGuid());
+            return;
+        }
+
+        for (QuotaCluster quotaCluster : quota.getQuotaClusters()) {
+            quotaCluster.setQuotaId(quota.getId());
+            quotaCluster.setQuotaClusterId(Guid.newGuid());
+        }
     }
 
     // Setting defaults for hard and soft limits, for REST
-    protected void setQuotaThresholdDefaults(Quota quotaParameter) {
+    private void setQuotaThresholdDefaults(Quota quotaParameter) {
         if (quotaParameter.getGraceStoragePercentage() == 0) {
             quotaParameter.setGraceStoragePercentage(Config.<Integer> getValue(ConfigValues.QuotaGraceStorage));
         }

@@ -156,7 +156,7 @@ public class StorageDiskListModel extends SearchableListModel<StorageDomain, Dis
     }
 
     private void updateActionAvailability() {
-        List<DiskImage> disks = getSelectedItems() != null ? getSelectedItems() : new ArrayList<DiskImage>();
+        List<DiskImage> disks = getSelectedItems() != null ? getSelectedItems() : new ArrayList<>();
 
         getRemoveCommand().setIsExecutionAllowed(disks.size() > 0 && isRemoveCommandAvailable(disks));
         getUploadCommand().setIsExecutionAllowed(isUploadCommandAvailable());
@@ -168,15 +168,8 @@ public class StorageDiskListModel extends SearchableListModel<StorageDomain, Dis
     }
 
     private boolean isRemoveCommandAvailable(List<DiskImage> disks) {
-        for (DiskImage disk : disks) {
-            boolean isImageLocked = disk.getImageStatus() == ImageStatus.LOCKED;
-
-            if (isImageLocked) {
-                return false;
-            }
-        }
-
-        return true;
+        return disks.stream().noneMatch(d -> d.getImageStatus() == ImageStatus.LOCKED ||
+                (d.isOvfStore() && d.getImageStatus() != ImageStatus.ILLEGAL));
     }
 
     private boolean isUploadCommandAvailable() {
@@ -196,7 +189,7 @@ public class StorageDiskListModel extends SearchableListModel<StorageDomain, Dis
 
         model.getLatch().setIsAvailable(false);
 
-        ArrayList<DiskModel> items = new ArrayList<>();
+        List<DiskModel> items = new ArrayList<>();
         for (Object item : getSelectedItems()) {
             DiskImage disk = (DiskImage) item;
 
@@ -215,7 +208,7 @@ public class StorageDiskListModel extends SearchableListModel<StorageDomain, Dis
 
     private void onRemove() {
         RemoveDiskModel model = (RemoveDiskModel) getWindow();
-        ArrayList<ActionParametersBase> paramerterList = new ArrayList<>();
+        List<ActionParametersBase> paramerterList = new ArrayList<>();
 
         for (Object item : getSelectedItems()) {
             DiskImage disk = (DiskImage) item;

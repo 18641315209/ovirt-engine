@@ -1086,11 +1086,6 @@ public class DataCenterGuideModel extends GuideModel<StoragePool> implements ITa
             return;
         }
 
-        if (!model.validate(model.getEnableOvirtService().getEntity())) { // CPU is mandatory only if the
-                                                                                  // cluster is virt enabled
-            return;
-        }
-
         // Save changes.
         Version version = model.getVersion().getSelectedItem();
 
@@ -1109,6 +1104,7 @@ public class DataCenterGuideModel extends GuideModel<StoragePool> implements ITa
         cluster.setGlusterService(model.getEnableGlusterService().getEntity());
         cluster.setOptionalReasonRequired(model.getEnableOptionalReason().getEntity());
         cluster.setMaintenanceReasonRequired(model.getEnableHostMaintenanceReason().getEntity());
+        cluster.setFirewallType(model.getFirewallType().getSelectedItem());
         if (model.getClusterPolicy().getSelectedItem() != null) {
             ClusterPolicy selectedPolicy = model.getClusterPolicy().getSelectedItem();
             cluster.setClusterPolicyId(selectedPolicy.getId());

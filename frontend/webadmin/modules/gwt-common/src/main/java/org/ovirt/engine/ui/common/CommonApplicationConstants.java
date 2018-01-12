@@ -1011,6 +1011,14 @@ public interface CommonApplicationConstants extends Constants {
 
     String storageIscsiSelectStorageLabel();
 
+    String storageIscsiRemoveLUNsLabel();
+
+    String storageIscsiAvailableActionsOnMaintenanceLabel();
+
+    String storageIscsiActionsLabel();
+
+    String storageIscsiAvailableActionsForActiveDomainsLabel();
+
     String targetNameSanStorage();
 
     String addressSanStorage();
@@ -1053,7 +1061,9 @@ public interface CommonApplicationConstants extends Constants {
 
     String imageDownloadTransferring();
 
-    String imageTransferringViaAPI();
+    String uploadingImageViaAPI();
+
+    String downloadingImageViaAPI();
 
     String imageTransferPausedSystem();
 

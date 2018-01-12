@@ -1,0 +1,6 @@
+---
+- name: Run query script
+  script: >
+    query_ova.py
+    "{{ ovirt_query_ova_path }}"
+  register: extraction_result

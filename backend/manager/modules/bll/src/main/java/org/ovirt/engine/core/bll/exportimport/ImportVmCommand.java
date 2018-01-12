@@ -104,6 +104,7 @@ import org.ovirt.engine.core.common.validation.group.ImportClonedEntity;
 import org.ovirt.engine.core.common.validation.group.ImportEntity;
 import org.ovirt.engine.core.common.vdscommands.GetDeviceListVDSCommandParameters;
 import org.ovirt.engine.core.common.vdscommands.GetImageInfoVDSCommandParameters;
+import org.ovirt.engine.core.common.vdscommands.StorageServerConnectionManagementVDSParameters;
 import org.ovirt.engine.core.common.vdscommands.VDSCommandType;
 import org.ovirt.engine.core.common.vdscommands.VDSReturnValue;
 import org.ovirt.engine.core.compat.Guid;
@@ -251,15 +252,19 @@ public class ImportVmCommand<T extends ImportVmParameters> extends ImportVmComma
     private List<EngineMessage> validateLunDisk(LunDisk lunDisk) {
         DiskValidator diskValidator = getDiskValidator(lunDisk);
         LUNs lun = lunDisk.getLun();
-        StorageType storageType = StorageType.UNKNOWN;
+        StorageType storageType;
         if (lun.getLunConnections() != null && !lun.getLunConnections().isEmpty()) {
             // We set the storage type based on the first connection since connections should be with the same
             // storage type
             storageType = lun.getLunConnections().get(0).getStorageType();
+        } else {
+            storageType = StorageType.FCP;
         }
-        ValidationResult connectionsInLunResult = diskValidator.validateConnectionsInLun(storageType);
-        if (!connectionsInLunResult.isValid()) {
-            return connectionsInLunResult.getMessages();
+        if (storageType == StorageType.ISCSI) {
+            ValidationResult connectionsInLunResult = diskValidator.validateConnectionsInLun(storageType);
+            if (!connectionsInLunResult.isValid()) {
+                return connectionsInLunResult.getMessages();
+            }
         }
 
         ValidationResult lunAlreadyInUseResult = diskValidator.validateLunAlreadyInUse();
@@ -280,12 +285,7 @@ public class ImportVmCommand<T extends ImportVmParameters> extends ImportVmComma
         }
 
         Guid vdsId = vdsCommandsHelper.getHostForExecution(getStoragePoolId());
-        GetDeviceListVDSCommandParameters parameters =
-                new GetDeviceListVDSCommandParameters(vdsId,
-                        lun.getLunType(),
-                        false,
-                        Collections.singleton(lun.getLUNId()));
-        if (validateLunExistsAndInitDeviceData(lun, parameters)) {
+        if (!validateLunExistsAndInitDeviceData(lun, storageType, vdsId)) {
             return Arrays.asList(EngineMessage.ACTION_TYPE_FAILED_DISK_LUN_INVALID);
         }
 
@@ -298,11 +298,27 @@ public class ImportVmCommand<T extends ImportVmParameters> extends ImportVmComma
         return Collections.emptyList();
     }
 
-    private boolean validateLunExistsAndInitDeviceData(LUNs lun, GetDeviceListVDSCommandParameters parameters) {
-        List<LUNs> lunFromStorage =
-                (List<LUNs>) runVdsCommand(VDSCommandType.GetDeviceList, parameters).getReturnValue();
+    private boolean validateLunExistsAndInitDeviceData(LUNs lun, StorageType storageType, Guid vdsId) {
+        List<LUNs> lunFromStorage = null;
+        try {
+            StorageServerConnectionManagementVDSParameters connectParams =
+                    new StorageServerConnectionManagementVDSParameters(vdsId,
+                            Guid.Empty,
+                            storageType,
+                            lun.getLunConnections());
+            runVdsCommand(VDSCommandType.ConnectStorageServer, connectParams);
+            GetDeviceListVDSCommandParameters parameters =
+                    new GetDeviceListVDSCommandParameters(vdsId,
+                            storageType,
+                            false,
+                            Collections.singleton(lun.getLUNId()));
+            lunFromStorage = (List<LUNs>) runVdsCommand(VDSCommandType.GetDeviceList, parameters).getReturnValue();
+        } catch (EngineException e) {
+            log.debug("Exception while validating LUN disk: '{}'", e);
+            return false;
+        }
         if (lunFromStorage == null || lunFromStorage.isEmpty()) {
-            return true;
+            return false;
         } else {
             LUNs luns = lunFromStorage.get(0);
             lun.setSerial(luns.getSerial());
@@ -311,10 +327,9 @@ public class ImportVmCommand<T extends ImportVmParameters> extends ImportVmComma
             lun.setProductId(luns.getProductId());
             lun.setProductId(luns.getProductId());
             lun.setDiscardMaxSize(luns.getDiscardMaxSize());
-            lun.setDiscardZeroesData(luns.getDiscardZeroesData());
             lun.setPvSize(luns.getPvSize());
         }
-        return false;
+        return true;
     }
 
     private ValidationResult isVirtIoScsiValid(VM vm, DiskVmElementValidator diskVmElementValidator) {
@@ -406,7 +421,7 @@ public class ImportVmCommand<T extends ImportVmParameters> extends ImportVmComma
         if (getVm().isAutoStartup() && shouldAddLease(getVm().getStaticData())) {
             if (FeatureSupported.isVmLeasesSupported(getEffectiveCompatibilityVersion())) {
                 if (validateLeaseStorageDomain(getVm().getLeaseStorageDomainId())) {
-                    if (!addVmLease(getVm().getLeaseStorageDomainId(), getVm().getId())) {
+                    if (!addVmLease(getVm().getLeaseStorageDomainId(), getVm().getId(), false)) {
                         getVm().setLeaseStorageDomainId(null);
                     }
                 } else {
@@ -847,6 +862,7 @@ public class ImportVmCommand<T extends ImportVmParameters> extends ImportVmComma
                 getParameters().setVm(getVm());
                 setVmId(getVm().getId());
             }
+            vmStaticDao.incrementDbGeneration(getVmId());
             return null;
 
         });
@@ -1331,10 +1347,12 @@ public class ImportVmCommand<T extends ImportVmParameters> extends ImportVmComma
 
     protected void endActionOnAllImageGroups() {
         for (ActionParametersBase p : getParameters().getImagesParameters()) {
-            p.setTaskGroupSuccess(getParameters().getTaskGroupSuccess());
-            getBackend().endAction(ActionType.CopyImageGroup,
-                    p,
-                    getContext().clone().withoutCompensationContext().withoutExecutionContext().withoutLock());
+            if (p instanceof MoveOrCopyImageGroupParameters) {
+                p.setTaskGroupSuccess(getParameters().getTaskGroupSuccess());
+                getBackend().endAction(ActionType.CopyImageGroup,
+                        p,
+                        getContext().clone().withoutCompensationContext().withoutExecutionContext().withoutLock());
+            }
         }
     }
 

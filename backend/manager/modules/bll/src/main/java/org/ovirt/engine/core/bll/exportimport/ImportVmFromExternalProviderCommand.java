@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
@@ -44,7 +45,6 @@ import org.ovirt.engine.core.common.businessentities.VDSStatus;
 import org.ovirt.engine.core.common.businessentities.VMStatus;
 import org.ovirt.engine.core.common.businessentities.VmDevice;
 import org.ovirt.engine.core.common.businessentities.VmDynamic;
-import org.ovirt.engine.core.common.businessentities.network.VmNetworkInterface;
 import org.ovirt.engine.core.common.businessentities.storage.DiskImage;
 import org.ovirt.engine.core.common.businessentities.storage.DiskInterface;
 import org.ovirt.engine.core.common.businessentities.storage.DiskVmElement;
@@ -57,6 +57,7 @@ import org.ovirt.engine.core.dao.ClusterDao;
 import org.ovirt.engine.core.dao.StorageDomainDao;
 import org.ovirt.engine.core.dao.VdsDao;
 import org.ovirt.engine.core.dao.VmDeviceDao;
+import org.ovirt.engine.core.utils.transaction.TransactionSupport;
 
 @DisableInPrepareMode
 @NonTransactiveCommandAttribute(forceCompensation = true)
@@ -287,12 +288,29 @@ implements QuotaStorageDependent {
     @Override
     protected void addVmInterfaces() {
         super.addVmInterfaces();
-        for (VmNetworkInterface iface : getVm().getInterfaces()) {
-            getVmDeviceUtils().addInterface(getVmId(), iface.getId(), iface.isPlugged(), false);
-        }
+        addNetworkInterfaceDevices();
     }
 
-    private Guid createDisk(DiskImage image, boolean isBoot) {
+    protected void addNetworkInterfaceDevices() {
+        getVm().getInterfaces().forEach(iface
+                -> getVmDeviceUtils().addInterface(getVmId(), iface.getId(), iface.isPlugged(), false));
+    }
+
+    protected Guid createDisk(DiskImage image, boolean isBoot) {
+
+        ActionReturnValue actionReturnValue =
+                runInternalActionWithTasksContext(ActionType.AddDisk, buildAddDiskParameters(image, isBoot));
+
+        if (!actionReturnValue.getSucceeded()) {
+            throw new EngineException(actionReturnValue.getFault().getError(),
+                    "Failed to create disk!");
+        }
+
+        getTaskIdList().addAll(actionReturnValue.getInternalVdsmTaskIdList());
+        return actionReturnValue.getActionReturnValue();
+    }
+
+    protected AddDiskParameters buildAddDiskParameters(DiskImage image, boolean isBoot) {
         image.setDiskAlias(renameDiskAlias(getVm().getOrigin(), image.getDiskAlias()));
 
         AddDiskParameters diskParameters = new AddDiskParameters(new DiskVmElement(null, getVmId()), image);
@@ -307,16 +325,7 @@ implements QuotaStorageDependent {
         dve.setBoot(isBoot);
         diskParameters.setDiskVmElement(dve);
 
-        ActionReturnValue actionReturnValue =
-                runInternalActionWithTasksContext(ActionType.AddDisk, diskParameters);
-
-        if (!actionReturnValue.getSucceeded()) {
-            throw new EngineException(actionReturnValue.getFault().getError(),
-                    "Failed to create disk!");
-        }
-
-        getTaskIdList().addAll(actionReturnValue.getInternalVdsmTaskIdList());
-        return actionReturnValue.getActionReturnValue();
+        return diskParameters;
     }
 
     private void checkImageTarget() {
@@ -417,23 +426,28 @@ implements QuotaStorageDependent {
     protected void endWithFailure() {
         // Since AddDisk is called internally, its audit log on end-action will not be logged
         auditLog(this, AuditLogType.ADD_DISK_INTERNAL_FAILURE);
-        endActionOnDisks();
+        // This command uses compensation so if we won't execute the following block in a new
+        // transaction then the images might be updated within this transaction scope and block
+        // RemoveVm that also tries to update the images later on
+        TransactionSupport.executeInNewTransaction(() -> {
+            endActionOnDisks();
+            return null;
+        });
         removeVm();
         setSucceeded(true);
     }
 
-    private void removeVm() {
+    protected void removeVm() {
         runInternalActionWithTasksContext(
                 ActionType.RemoveVm,
-                new RemoveVmParameters(getVmId(), true));
+                new RemoveVmParameters(getVmId(), true),
+                getLock());
     }
 
     protected List<DiskImage> getDisks() {
-        List<DiskImage> disks = new ArrayList<>();
-        for (Guid diskId : getParameters().getDisks()) {
-            disks.add(getDisk(diskId));
-        }
-        return disks;
+        return getParameters().getDisks().stream()
+                .map(this::getDisk)
+                .collect(Collectors.toList());
     }
 
     private DiskImage getDisk(Guid diskId) {

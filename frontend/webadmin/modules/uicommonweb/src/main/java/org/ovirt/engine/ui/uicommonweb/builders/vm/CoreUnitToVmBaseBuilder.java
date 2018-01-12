@@ -1,6 +1,7 @@
 package org.ovirt.engine.ui.uicommonweb.builders.vm;
 
 import org.ovirt.engine.core.common.businessentities.VmBase;
+import org.ovirt.engine.core.common.businessentities.VmResumeBehavior;
 import org.ovirt.engine.core.compat.Guid;
 import org.ovirt.engine.ui.uicommonweb.dataprovider.AsyncDataProvider;
 import org.ovirt.engine.ui.uicommonweb.models.vms.IconCache;
@@ -26,7 +27,8 @@ public class CoreUnitToVmBaseBuilder extends HwOnlyCoreUnitToVmBaseBuilder {
         vm.setClusterId(model.getSelectedCluster() != null ? model.getSelectedCluster().getId() : null);
         vm.setTimeZone(model.getTimeZone().getIsAvailable() && model.getTimeZone().getSelectedItem() != null ? model.getTimeZone()
                 .getSelectedItem().getTimeZoneKey() : ""); //$NON-NLS-1$
-        vm.setIsoPath(model.getCdImage().getIsChangable() ? model.getCdImage().getSelectedItem() : ""); //$NON-NLS-1$
+        vm.setIsoPath(model.getCdImage().getIsChangable() && model.getCdImage().getSelectedItem() != null ?
+                model.getCdImage().getSelectedItem().getRepoImageId() : ""); //$NON-NLS-1$
         vm.setDeleteProtected(model.getIsDeleteProtected().getEntity());
         vm.setOsId(model.getOSType().getSelectedItem());
         Guid largeIconId = IconCache.getInstance().getId(model.getIcon().getEntity().getIcon());
@@ -46,7 +48,13 @@ public class CoreUnitToVmBaseBuilder extends HwOnlyCoreUnitToVmBaseBuilder {
         vm.setMigrateCompressed(model.getMigrateCompressed().getSelectedItem());
         vm.setCustomProperties(model.getCustomPropertySheet().serialize());
         vm.setConsoleDisconnectAction(model.getConsoleDisconnectAction().getSelectedItem());
-        vm.setResumeBehavior(model.getResumeBehavior().getSelectedItem());
+        VmResumeBehavior selectedResumeBehavior = model.getResumeBehavior().getSelectedItem();
+        if (selectedResumeBehavior == null) {
+            // the default
+            vm.setResumeBehavior(VmResumeBehavior.AUTO_RESUME);
+        } else {
+            vm.setResumeBehavior(selectedResumeBehavior);
+        }
         if (model.getCpuSharesAmount().getIsAvailable() && model.getCpuSharesAmount().getEntity() != null) {
             vm.setCpuShares(model.getCpuSharesAmount().getEntity());
         }

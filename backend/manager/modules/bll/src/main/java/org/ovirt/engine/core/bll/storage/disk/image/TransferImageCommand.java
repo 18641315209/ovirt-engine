@@ -1,5 +1,8 @@
 package org.ovirt.engine.core.bll.storage.disk.image;
 
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -46,9 +49,11 @@ import org.ovirt.engine.core.compat.Guid;
 import org.ovirt.engine.core.dao.ImageDao;
 import org.ovirt.engine.core.dao.ImageTransferDao;
 import org.ovirt.engine.core.dao.VdsDao;
+import org.ovirt.engine.core.utils.EngineLocalConfig;
 import org.ovirt.engine.core.utils.JsonHelper;
 import org.ovirt.engine.core.utils.crypt.EngineEncryptionUtils;
 import org.ovirt.engine.core.uutils.crypto.ticket.TicketEncoder;
+import org.ovirt.engine.core.uutils.net.HttpURLConnectionBuilder;
 
 @NonTransactiveCommandAttribute
 public abstract class TransferImageCommand<T extends TransferImageParameters> extends BaseImagesCommand<T> {
@@ -65,6 +70,7 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
     private static final String HTTP_SCHEME = "http://";
     private static final String HTTPS_SCHEME = "https://";
     private static final String IMAGES_PATH = "/images";
+    private static final String TICKETS_PATH = "/tickets/";
 
     @Inject
     private ImageTransferUpdater imageTransferUpdater;
@@ -233,9 +239,7 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
         getParameters().setDestinationImageId(image.getImageId());
 
         // ovirt-imageio-daemon must know the boundaries of the target image for writing permissions.
-        if (getParameters().getTransferSize() == 0) {
-            getParameters().setTransferSize(getTransferSize(image, domainId));
-        }
+        getParameters().setTransferSize(getTransferSize(image, domainId));
 
         persistCommand(getParameters().getParentCommand(), true);
         setImage(image);
@@ -269,7 +273,8 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
             return imageInfoFromVdsm.getApparentSizeInBytes();
         } else {
             // Upload
-            return getDiskImage().getSize();
+            return getParameters().getTransferSize() != 0 ?
+                    getParameters().getTransferSize() : getDiskImage().getActualSizeInBytes();
         }
     }
 
@@ -359,7 +364,7 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
     private void finalizeDownloadIfNecessary(final StateContext context, ImageTransfer upToDateImageTransfer) {
         if (upToDateImageTransfer.getBytesTotal() != 0 &&
                 // Frontend flow (REST API should close the connection on its own).
-                upToDateImageTransfer.getBytesTotal().equals(upToDateImageTransfer.getBytesSent()) &&
+                getParameters().getTransferSize() == upToDateImageTransfer.getBytesSent() &&
                 !upToDateImageTransfer.getActive()) {
             // Heuristic - once the transfer is inactive, we want to wait another COCO iteration
             // to decrease the chances that the few last packets are still on the way to the client.
@@ -451,6 +456,9 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
             setImageStatus(getParameters().getTransferType() == TransferType.Upload ?
                     ImageStatus.ILLEGAL : ImageStatus.OK);
         }
+        // Teardown is required for all scenarios as we call prepareImage when
+        // starting a new session.
+        tearDownImage(context.entity.getVdsId());
         updateEntityPhase(ImageTransferPhase.FINISHED_FAILURE);
         setAuditLogTypeFromPhase(ImageTransferPhase.FINISHED_FAILURE);
     }
@@ -530,6 +538,26 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
         }
 
         long timeout = getHostTicketLifetime();
+        if (!addImageTicketToDaemon(imagedTicketId, timeout)) {
+            return false;
+        }
+        if (!addImageTicketToProxy(imagedTicketId, signedTicket)) {
+            return false;
+        }
+
+        ImageTransfer updates = new ImageTransfer();
+        updates.setVdsId(getVdsId());
+        updates.setImagedTicketId(imagedTicketId);
+        updates.setProxyUri(getProxyUri() + IMAGES_PATH);
+        updates.setDaemonUri(getImageDaemonUri(getVds().getHostName()) + IMAGES_PATH);
+        updates.setSignedTicket(signedTicket);
+        updateEntity(updates);
+
+        setNewSessionExpiration(timeout);
+        return true;
+    }
+
+    private boolean addImageTicketToDaemon(Guid imagedTicketId, long timeout) {
         String imagePath;
         try {
             imagePath = prepareImage(getVdsId());
@@ -569,16 +597,48 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
         log.info("Started transfer session with ticket id {}, timeout {} seconds",
                 imagedTicketId.toString(), timeout);
 
-        ImageTransfer updates = new ImageTransfer();
-        updates.setVdsId(getVdsId());
-        updates.setImagedTicketId(imagedTicketId);
-        updates.setProxyUri(getProxyUri() + IMAGES_PATH);
-        updates.setDaemonUri(getImageDaemonUri(getVds().getHostName()) + IMAGES_PATH);
-        updates.setSignedTicket(signedTicket);
-        updateEntity(updates);
-
-        setNewSessionExpiration(timeout);
         return true;
+    }
+
+    private boolean addImageTicketToProxy(Guid imagedTicketId, String signedTicket) {
+        log.info("Adding image ticket to ovirt-imageio-proxy, id {}", imagedTicketId);
+        try {
+            HttpURLConnection connection = getProxyConnection(getProxyUri() + TICKETS_PATH);
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestMethod("PUT");
+            // Send request
+            try (OutputStream outputStream = connection.getOutputStream()) {
+                outputStream.write(signedTicket.getBytes(StandardCharsets.UTF_8));
+                outputStream.flush();
+                outputStream.close();
+            }
+            int responseCode = connection.getResponseCode();
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                throw new RuntimeException(String.format(
+                        "Request to imageio-proxy failed, response code: %s", responseCode));
+            }
+        } catch (Exception ex) {
+            log.error("Failed to add image ticket to ovirt-imageio-proxy", ex.getMessage());
+            return false;
+        }
+        return true;
+    }
+
+    private HttpURLConnection getProxyConnection(String url) {
+        try {
+            HttpURLConnectionBuilder builder = new HttpURLConnectionBuilder().setURL(url);
+            // Set SSL details
+            builder.setTrustStore(EngineLocalConfig.getInstance().getPKITrustStore().getAbsolutePath())
+                    .setTrustStorePassword(EngineLocalConfig.getInstance().getPKITrustStorePassword())
+                    .setTrustStoreType(EngineLocalConfig.getInstance().getPKITrustStoreType())
+                    .setHttpsProtocol(Config.getValue(ConfigValues.ExternalCommunicationProtocol));
+            HttpURLConnection connection = builder.create();
+            connection.setDoOutput(true);
+            return connection;
+        } catch (Exception ex) {
+            throw new RuntimeException(String.format(
+                    "Failed to communicate with ovirt-imageio-proxy: %s", ex.getMessage()));
+        }
     }
 
     private boolean setVolumeLegalityInStorage(boolean legal) {
@@ -660,29 +720,54 @@ public abstract class TransferImageCommand<T extends TransferImageParameters> ex
             return false;
         }
 
-        Guid resourceId = entity.getImagedTicketId();
-        RemoveImageTicketVDSCommandParameters parameters = new RemoveImageTicketVDSCommandParameters(
-                entity.getVdsId(), resourceId);
+        if (!removeImageTicketFromDaemon(entity.getImagedTicketId(), entity.getVdsId())) {
+            return false;
+        }
+        if (!removeImageTicketFromProxy(entity.getImagedTicketId())) {
+            return false;
+        }
 
-        // TODO This is called from doPolling(), we should run it async (runFutureVDSCommand?)
+        ImageTransfer updates = new ImageTransfer();
+        updateEntity(updates, true);
+        return true;
+    }
+
+    private boolean removeImageTicketFromDaemon(Guid imagedTicketId, Guid vdsId) {
+        RemoveImageTicketVDSCommandParameters parameters = new RemoveImageTicketVDSCommandParameters(
+                vdsId, imagedTicketId);
         VDSReturnValue vdsRetVal;
         try {
             vdsRetVal = getBackend().getResourceManager().runVdsCommand(
                     VDSCommandType.RemoveImageTicket, parameters);
         } catch (RuntimeException e) {
-            log.error("Failed to stop image transfer session for ticket '{}': {}", resourceId.toString(), e);
+            log.error("Failed to stop image transfer session for ticket '{}': {}", imagedTicketId, e);
             return false;
         }
 
         if (!vdsRetVal.getSucceeded()) {
-            log.warn("Failed to stop image transfer session for ticket '{}'", resourceId.toString());
+            log.warn("Failed to stop image transfer session for ticket '{}'", imagedTicketId);
             return false;
         }
-        log.info("Successfully stopped image transfer session for ticket '{}'", resourceId.toString());
+        log.info("Successfully stopped image transfer session for ticket '{}'", imagedTicketId);
+        return true;
+    }
 
-        ImageTransfer updates = new ImageTransfer();
-        boolean clearResourceId = true;
-        updateEntity(updates, clearResourceId);
+    private boolean removeImageTicketFromProxy(Guid imagedTicketId) {
+        log.info("Removing image ticket from ovirt-imageio-proxy, id {}", imagedTicketId);
+        try {
+            HttpURLConnection connection = getProxyConnection(getProxyUri() + TICKETS_PATH + imagedTicketId);
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestMethod("DELETE");
+            connection.connect();
+            int responseCode = connection.getResponseCode();
+            if (responseCode != HttpURLConnection.HTTP_NO_CONTENT) {
+                throw new RuntimeException(String.format(
+                        "Request to imageio-proxy failed, response code: %s", responseCode));
+            }
+        } catch (Exception ex) {
+            log.error("Failed to remove image ticket from ovirt-imageio-proxy", ex.getMessage());
+            return false;
+        }
         return true;
     }
 

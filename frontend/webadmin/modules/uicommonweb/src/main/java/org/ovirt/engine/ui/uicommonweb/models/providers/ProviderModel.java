@@ -60,6 +60,7 @@ public class ProviderModel extends Model {
     private EntityModel<String> name = new EntityModel<>();
     private EntityModel<String> description = new EntityModel<>();
     private EntityModel<String> url = new EntityModel<>();
+    private EntityModel<Boolean> isUnmanaged = new EntityModel<>();
     private EntityModel<Boolean> requiresAuthentication = new EntityModel<>();
     private EntityModel<String> username = new EntityModel<>();
     private EntityModel<String> password = new EntityModel<>();
@@ -100,6 +101,10 @@ public class ProviderModel extends Model {
 
     public EntityModel<String> getUrl() {
         return url;
+    }
+
+    public EntityModel<Boolean> getIsUnmanaged() {
+        return isUnmanaged;
     }
 
     public EntityModel<Boolean> getRequiresAuthentication() {
@@ -220,12 +225,9 @@ public class ProviderModel extends Model {
         this.action = action;
         this.provider = provider;
 
+        getRequiresAuthentication().setEntity(false);
         getRequiresAuthentication().getEntityChangedEvent().addListener((ev, sender, args) -> {
-            boolean authenticationRequired = requiresAuthentication.getEntity();
-            getUsername().setIsChangeable(authenticationRequired);
-            getPassword().setIsChangeable(authenticationRequired);
-            getTenantName().setIsChangeable(authenticationRequired);
-            getAuthUrl().setIsChangeable(authenticationRequired);
+            setAuthFieldsChangeableStatus(requiresAuthentication.getEntity(), isUnmanaged.getEntity());
         });
         setType(new ListModel<ProviderType>() {
             @Override
@@ -241,11 +243,23 @@ public class ProviderModel extends Model {
                 }
             }
         });
+        getIsUnmanaged().setEntity(false);
+        getIsUnmanaged().getPropertyChangedEvent().addListener((ev, sender, args) -> {
+            boolean isUnmanaged = getIsUnmanaged().getEntity();
+            getRequiresAuthentication().setIsChangeable(!isUnmanaged);
+            boolean requiresAuthentication = getRequiresAuthentication().getEntity();
+            setAuthFieldsChangeableStatus(requiresAuthentication, isUnmanaged);
+            getReadOnly().setIsChangeable(!isUnmanaged);
+            getUrl().setIsChangeable(!isUnmanaged);
+        });
+
         getType().getSelectedItemChangedEvent().addListener((ev, sender, args) -> {
+            boolean isUnmanagedAware = getType().getSelectedItem().isUnmanagedAware();
             boolean isTenantAware = getType().getSelectedItem().isTenantAware();
             boolean isAuthUrlAware = getType().getSelectedItem().isAuthUrlAware();
             boolean isReadOnlyAware = getType().getSelectedItem().isReadOnlyAware();
 
+            getIsUnmanaged().setIsAvailable(isUnmanagedAware);
             getTenantName().setIsAvailable(isTenantAware);
             getAuthUrl().setIsAvailable(isAuthUrlAware);
             if (isTenantAware) {
@@ -342,6 +356,14 @@ public class ProviderModel extends Model {
         });
     }
 
+    private void setAuthFieldsChangeableStatus(boolean requiresAuthentication, boolean isUnmanaged) {
+        boolean status = requiresAuthentication && !isUnmanaged;
+        getUsername().setIsChangeable(status);
+        getPassword().setIsChangeable(status);
+        getTenantName().setIsChangeable(status);
+        getAuthUrl().setIsChangeable(status);
+    }
+
     public ProxyHostPropertiesModel getProxyHostPropertiesModel() {
         if (isTypeXEN()) {
             return getXenPropertiesModel();
@@ -418,7 +440,7 @@ public class ProviderModel extends Model {
         getUrl().validateEntity(new IValidation[] { new NotEmptyValidation(),
                 new UrlValidation(Uri.SCHEME_HTTP, Uri.SCHEME_HTTPS) });
 
-        return getUrl().getIsValid() &&
+        return (getUrl().getEntity() == null || getUrl().getIsValid() || getUrl().getEntity().isEmpty()) &&
                 getUsername().getIsValid() &&
                 getPassword().getIsValid() &&
                 getTenantName().getIsValid() &&
@@ -434,6 +456,7 @@ public class ProviderModel extends Model {
         provider.setType(type.getSelectedItem());
         provider.setDescription(description.getEntity());
         provider.setUrl(url.getEntity());
+        provider.setIsUnmanaged(isUnmanaged.getEntity());
 
         if (isTypeNetwork()) {
             getNeutronAgentModel().flush(provider);
@@ -507,6 +530,10 @@ public class ProviderModel extends Model {
     }
 
     private void onTest() {
+        if (isUnmanaged.getEntity()) {
+            return;
+        }
+
         if (!validateConnectionSettings()) {
             getTestResult().setEntity(ConstantsManager.getInstance().getConstants().testFailedInsufficientParams());
             return;
@@ -623,4 +650,7 @@ public class ProviderModel extends Model {
         getTestResult().setEntity(errorMessage);
     }
 
+    public boolean isEditProviderMode () {
+        return action == ActionType.UpdateProvider;
+    }
 }

@@ -6,8 +6,7 @@ import java.util.Objects;
 
 import org.ovirt.engine.core.common.action.ActionReturnValue;
 import org.ovirt.engine.core.common.action.ActionType;
-import org.ovirt.engine.core.common.action.AddExternalSubnetParameters;
-import org.ovirt.engine.core.common.action.AddNetworkStoragePoolParameters;
+import org.ovirt.engine.core.common.action.AddNetworkWithSubnetParameters;
 import org.ovirt.engine.core.common.action.ManageNetworkClustersParameters;
 import org.ovirt.engine.core.common.businessentities.Cluster;
 import org.ovirt.engine.core.common.businessentities.Provider;
@@ -48,6 +47,7 @@ public class NewNetworkModel extends NetworkModel {
         setTitle(ConstantsManager.getInstance().getConstants().newLogicalNetworkTitle());
         setHelpTag(HelpTag.new_logical_network);
         setHashName("new_logical_network"); //$NON-NLS-1$
+        getConnectedToPhysicalNetwork().setEntity(true);
 
         initMtu();
     }
@@ -73,7 +73,7 @@ public class NewNetworkModel extends NetworkModel {
     protected NetworkClusterModel createNetworkClusterModel(Cluster cluster) {
         NetworkClusterModel networkClusterModel = new NetworkClusterModel(cluster);
         networkClusterModel.setAttached(true);
-        networkClusterModel.setRequired(!getExport().getEntity());
+        networkClusterModel.setRequired(!getExternal().getEntity());
 
         return networkClusterModel;
     }
@@ -108,8 +108,13 @@ public class NewNetworkModel extends NetworkModel {
     }
 
     @Override
+    protected void selectPhysicalDatacenterNetwork() {
+        getDatacenterPhysicalNetwork().setSelectedItem(Linq.firstOrNull(getDatacenterPhysicalNetwork().getItems()));
+    }
+
+    @Override
     protected void onExportChanged() {
-        boolean externalNetwork = getExport().getEntity();
+        boolean externalNetwork = getExternal().getEntity();
         getExternalProviders().setIsChangeable(externalNetwork);
         getIsVmNetwork().setIsChangeable(!externalNetwork && isSupportBridgesReportByVDSM()
                 && ApplicationModeHelper.isModeSupported(ApplicationMode.VirtOnly));
@@ -131,22 +136,34 @@ public class NewNetworkModel extends NetworkModel {
 
     @Override
     protected void executeSave() {
-        final AddNetworkStoragePoolParameters parameters =
-                new AddNetworkStoragePoolParameters(getSelectedDc().getId(), getNetwork());
+        final AddNetworkWithSubnetParameters parameters =
+            new AddNetworkWithSubnetParameters(getSelectedDc().getId(), getNetwork());
         parameters.setVnicProfileRequired(false);
 
+
         // New network
-        if (getExport().getEntity()) {
+        if (getExternal().getEntity()) {
             Provider<?> externalProvider = getExternalProviders().getSelectedItem();
             ProviderNetwork providerNetwork = new ProviderNetwork();
             providerNetwork.setProviderId(externalProvider.getId());
             getNetwork().setProvidedBy(providerNetwork);
 
-            Frontend.getInstance().runAction(ActionType.AddNetworkOnProvider,
-                    parameters, addNetworkCallback(), null);
+            if (hasDefinedSubnet()) {
+                getSubnetModel().flush();
+                parameters.setExternalSubnet(getSubnetModel().getSubnet());
+            }
+
+            if (getConnectedToPhysicalNetwork().getEntity() && getUsePhysicalNetworkFromDatacenter().getEntity()) {
+                Network network = getDatacenterPhysicalNetwork().getSelectedItem();
+                providerNetwork.setPhysicalNetworkId(network.getId());
+            }
+
+            Frontend.getInstance().runAction(
+                hasDefinedSubnet() ? ActionType.AddNetworkWithSubnetOnProvider : ActionType.AddNetworkOnProvider,
+                parameters, addNetworkCallback(), null);
         } else {
             Frontend.getInstance().runAction(ActionType.AddNetwork,
-                    parameters, addNetworkCallback(), null);
+                parameters, addNetworkCallback(), null);
         }
     }
 
@@ -173,9 +190,6 @@ public class NewNetworkModel extends NetworkModel {
     private void postSaveAction(Guid id) {
         super.postSaveAction(id, true);
         attachNetworkToClusters(id);
-        if (hasDefinedSubnet()) {
-            addNetworkSubnetToProvider();
-        }
     }
 
     private void attachNetworkToClusters(Guid networkGuid) {
@@ -215,15 +229,6 @@ public class NewNetworkModel extends NetworkModel {
     }
 
     private boolean hasDefinedSubnet() {
-        return getExport().getEntity() && getCreateSubnet().getEntity() && getNetwork().isExternal();
-    }
-
-    private void addNetworkSubnetToProvider() {
-        ProviderNetwork providedBy = getNetwork().getProvidedBy();
-        getSubnetModel().setExternalNetwork(providedBy);
-        getSubnetModel().flush();
-
-        Frontend.getInstance().runAction(ActionType.AddSubnetToProvider, new AddExternalSubnetParameters(
-                getSubnetModel().getSubnet(), providedBy.getProviderId(), providedBy.getExternalId()));
+        return getExternal().getEntity() && getCreateSubnet().getEntity() && getNetwork().isExternal();
     }
 }

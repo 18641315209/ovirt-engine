@@ -16,7 +16,6 @@ limitations under the License.
 
 package org.ovirt.engine.core.common.utils.ansible;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,7 +27,7 @@ import javax.inject.Singleton;
 
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
-import org.ovirt.engine.core.common.utils.Pair;
+import org.ovirt.engine.core.utils.EngineLocalConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,11 +35,11 @@ import org.slf4j.LoggerFactory;
 public class AnsibleExecutor {
 
     private static Logger log = LoggerFactory.getLogger(AnsibleExecutor.class);
-    private static final int ANSIBLE_PLAYBOOK_TIMEOUT = 5;
     public static final String DEFAULT_LOG_DIRECTORY = "ansible";
 
     /**
      * Executes ansible-playbook command.
+     * Default timeout is specified by ANSIBLE_PLAYBOOK_EXEC_DEFAULT_TIMEOUT variable in engine.conf.
      *
      * @param command
      *            the command to be executed
@@ -51,8 +50,9 @@ public class AnsibleExecutor {
      * @throws InterruptedException
      *            when the execution of the command fails
      */
-    public AnsibleReturnValue runCommand(AnsibleCommandBuilder command, Pair<String, String> ... envVars) throws IOException, InterruptedException {
-        return runCommand(command, ANSIBLE_PLAYBOOK_TIMEOUT, true, envVars);
+    public AnsibleReturnValue runCommand(AnsibleCommandBuilder command) throws IOException, InterruptedException {
+        int timeout = EngineLocalConfig.getInstance().getInteger("ANSIBLE_PLAYBOOK_EXEC_DEFAULT_TIMEOUT");
+        return runCommand(command, timeout);
     }
 
     /**
@@ -61,7 +61,7 @@ public class AnsibleExecutor {
      * @param command
      *            the command to be executed
      * @param timeout
-     *            timeout in seconds to wait for command to finish
+     *            timeout in minutes to wait for command to finish
      * @return return
      *            code of ansible-playbook
      * @throws IOException
@@ -71,14 +71,13 @@ public class AnsibleExecutor {
      */
     public AnsibleReturnValue runCommand(
         AnsibleCommandBuilder command,
-        int timeout,
-        boolean redirectErrorStream,
-        Pair<String, String> ... envVars
+        int timeout
     ) throws IOException, InterruptedException {
         log.trace("Enter AnsibleExecutor::runCommand");
         AnsibleReturnValue returnValue = new AnsibleReturnValue(AnsibleReturnCode.ERROR);
 
         Path inventoryFile = null;
+        Process ansibleProcess = null;
         try {
             // Create a temporary inventory file if user didn't specified it:
             inventoryFile = createInventoryFile(command);
@@ -87,33 +86,42 @@ public class AnsibleExecutor {
             log.info("Executing Ansible command: {}", command);
 
             List<String> ansibleCommand = command.build();
-            File logFile = command.logFile();
             ProcessBuilder ansibleProcessBuilder = new ProcessBuilder()
-                .redirectErrorStream(redirectErrorStream)
                 .command(ansibleCommand)
                 .directory(command.playbookDir().toFile());
-
-            if (command.enableLogging()) {
-                ansibleProcessBuilder.redirectOutput(logFile);
-            }
 
             // Set environment variables:
             ansibleProcessBuilder.environment()
                 .put("ANSIBLE_CONFIG", Paths.get(command.playbookDir().toString(), "ansible.cfg").toString());
-            for (Pair<String, String> envVar : envVars) {
-                ansibleProcessBuilder.environment().put(envVar.getFirst(), envVar.getSecond());
+            if (command.enableLogging()) {
+                ansibleProcessBuilder.environment()
+                    .put("ANSIBLE_LOG_PATH", command.logFile().toString());
+            }
+            if (command.stdoutCallback() != null) {
+                ansibleProcessBuilder.environment()
+                    .put(AnsibleEnvironmentConstants.ANSIBLE_STDOUT_CALLBACK, command.stdoutCallback());
             }
 
             // Execute the command:
-            Process ansibleProcess = ansibleProcessBuilder.start();
-            ansibleProcess.waitFor(timeout, TimeUnit.MINUTES);
-            returnValue.setAnsibleReturnCode(AnsibleReturnCode.values()[ansibleProcess.exitValue()]);
+            ansibleProcess = ansibleProcessBuilder.start();
+            if (!ansibleProcess.waitFor(timeout, TimeUnit.MINUTES)) {
+                throw new Exception("Timeout occurred while executing Ansible playbook.");
+            }
 
-            if (!command.enableLogging()) {
+            returnValue.setAnsibleReturnCode(AnsibleReturnCode.values()[ansibleProcess.exitValue()]);
+            if (command.stdoutCallback() != null) {
                 returnValue.setStdout(IOUtils.toString(ansibleProcess.getInputStream()));
             }
-            ansibleProcess.destroy();
+        } catch (Throwable t) {
+            log.error(
+                "Ansible playbook execution failed: {}",
+                t.getMessage() != null ? t.getMessage() : t.getClass().getName()
+            );
+            log.debug("Exception:", t);
         } finally {
+            if (ansibleProcess != null) {
+                ansibleProcess.destroy();
+            }
             log.info("Ansible playbook command has exited with value: {}", returnValue.getAnsibleReturnCode());
             removeFile(inventoryFile);
         }

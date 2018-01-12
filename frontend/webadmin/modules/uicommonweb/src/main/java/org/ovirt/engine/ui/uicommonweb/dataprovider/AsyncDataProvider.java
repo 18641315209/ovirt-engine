@@ -2828,6 +2828,10 @@ public class AsyncDataProvider {
         return getSupportedVersions(ConfigValues.MigrationPoliciesSupported);
     }
 
+    public boolean isTestImageIOProxyConnectionSupported(Version clusterVersion) {
+        return (Boolean) getConfigValuePreConverted(ConfigValues.TestImageIOProxyConnectionSupported, clusterVersion.toString());
+    }
+
     private List<String> getSupportedVersions(ConfigValues option) {
         List<String> versions = new ArrayList<>();
         for (Entry<KeyValuePairCompat<ConfigValues, String>, Object> entry : cachedConfigValuesPreConvert.entrySet()) {
@@ -2869,7 +2873,7 @@ public class AsyncDataProvider {
         ArrayList<IStorageModel> models = new ArrayList<>();
 
         IscsiStorageModel iscsiDataModel = new IscsiStorageModel();
-        iscsiDataModel.setIsGrouppedByTarget(true);
+        iscsiDataModel.setIsGroupedByTarget(true);
         models.add(iscsiDataModel);
 
         FcpStorageModel fcpDataModel = new FcpStorageModel();
@@ -3043,7 +3047,7 @@ public class AsyncDataProvider {
         }
     }
 
-    private static class ListConverter<T> implements Converter<List<T>, List<T>> {
+    static class ListConverter<T> implements Converter<List<T>, List<T>> {
         @Override
         public List<T> convert(List<T> source) {
             return source != null ? source : new ArrayList<T>();
@@ -3276,9 +3280,9 @@ public class AsyncDataProvider {
                     QueryReturnValue interfaceQueryValue = values.get(i);
                     if (interfaceQueryValue.getReturnValue() != null) {
                         vdsList.get(i).getInterfaces().addAll(interfaceQueryValue.getReturnValue());
-                        callback.run();
                     }
                 }
+                callback.run();
             });
         } else {
             callback.run();

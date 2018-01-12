@@ -3,26 +3,28 @@ package org.ovirt.engine.ui.webadmin.section.main.view.popup.storage;
 import org.ovirt.engine.ui.common.editor.UiCommonEditorDriver;
 import org.ovirt.engine.ui.common.idhandler.WithElementId;
 import org.ovirt.engine.ui.common.view.popup.AbstractModelBoundPopupView;
+import org.ovirt.engine.ui.common.widget.HasUiCommandClickHandlers;
 import org.ovirt.engine.ui.common.widget.RadioButtonPanel;
+import org.ovirt.engine.ui.common.widget.UiCommandButton;
 import org.ovirt.engine.ui.common.widget.dialog.SimpleDialogButton;
 import org.ovirt.engine.ui.common.widget.dialog.SimpleDialogPanel;
-import org.ovirt.engine.ui.common.widget.editor.generic.StringEntityModelTextBoxEditor;
+import org.ovirt.engine.ui.common.widget.panel.AlertPanel;
 import org.ovirt.engine.ui.common.widget.uicommon.popup.vm.VmDiskPopupWidget;
 import org.ovirt.engine.ui.common.widget.uicommon.storage.ImageInfoForm;
 import org.ovirt.engine.ui.uicommonweb.models.storage.UploadImageModel;
 import org.ovirt.engine.ui.webadmin.ApplicationConstants;
+import org.ovirt.engine.ui.webadmin.ApplicationMessages;
 import org.ovirt.engine.ui.webadmin.gin.AssetProvider;
 import org.ovirt.engine.ui.webadmin.section.main.presenter.popup.storage.UploadImagePopupPresenterWidget;
 
 import com.google.gwt.core.client.GWT;
 import com.google.gwt.dom.client.InputElement;
-import com.google.gwt.editor.client.Editor;
 import com.google.gwt.event.shared.EventBus;
-import com.google.gwt.resources.client.CssResource;
+import com.google.gwt.safehtml.shared.SafeHtmlUtils;
 import com.google.gwt.uibinder.client.UiBinder;
 import com.google.gwt.uibinder.client.UiField;
+import com.google.gwt.user.client.Window;
 import com.google.gwt.user.client.ui.FileUpload;
-import com.google.gwt.user.client.ui.FlowPanel;
 import com.google.gwt.user.client.ui.HorizontalPanel;
 import com.google.gwt.user.client.ui.Label;
 import com.google.inject.Inject;
@@ -36,14 +38,6 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
         ViewUiBinder uiBinder = GWT.create(ViewUiBinder.class);
     }
 
-    interface WidgetStyle extends CssResource {
-        String imageUriEditor();
-        String imageUriEditorContent();
-    }
-
-    @UiField
-    WidgetStyle style;
-
     @UiField
     @Ignore
     Label imageSourceLabel;
@@ -56,7 +50,7 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
     HorizontalPanel imageFileUploadPanel;
 
     @UiField
-    FlowPanel uploadMessagePanel;
+    AlertPanel messagePanel;
 
     @UiField
     FileUpload imageFileUpload;
@@ -67,17 +61,6 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
     @UiField
     @Ignore
     Label imageFileUploadLabel;
-
-    @UiField
-    @Ignore
-    FlowPanel imageFileDownloadPanel;
-
-    @UiField
-    FlowPanel downloadMessagePanel;
-
-    @UiField
-    @Editor.Path(value = "imageUri.entity")
-    StringEntityModelTextBoxEditor imageUriEditor;
 
     @UiField
     @Ignore
@@ -92,9 +75,14 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
     @Ignore
     ImageInfoForm imageInfoForm;
 
+    @UiField
+    UiCommandButton testButton;
+
     private final Driver driver = GWT.create(Driver.class);
 
     private static final ApplicationConstants constants = AssetProvider.getConstants();
+
+    private static final ApplicationMessages messages = AssetProvider.getMessages();
 
     @Inject
     public UploadImagePopupView(EventBus eventBus) {
@@ -102,19 +90,12 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
         vmDiskPopupWidget = new VmDiskPopupWidget(false);
         initWidget(ViewUiBinder.uiBinder.createAndBindUi(this));
         localize();
-        addStyles();
         driver.initialize(this);
     }
 
     void localize() {
         imageSourceLabel.setText(constants.uploadImageSourceLabel());
-        imageUriEditor.setLabel(constants.uploadImageUriLabel());
         diskOptionsLabel.setText(constants.uploadImageDiskOptionsLabel());
-    }
-
-    void addStyles() {
-        imageUriEditor.addContentWidgetContainerStyleName(style.imageUriEditorContent());
-        imageUriEditor.addStyleName(style.imageUriEditor());
     }
 
     @Override
@@ -127,12 +108,12 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
 
         model.getPropertyChangedEvent().addListener((ev, sender, args) -> {
             if ("Message".equals(args.propertyName)) { //$NON-NLS-1$
-                setPanelMessage(uploadMessagePanel, model.getMessage());
+                setPanelMessage(messagePanel, model.getMessage(), AlertPanel.Type.WARNING);
             }
             else if ("IsValid".equals(args.propertyName)) { //$NON-NLS-1$
-                uploadMessagePanel.clear();
+                hidePanelMessage();
                 if (!model.getIsValid() && !model.getInvalidityReasons().isEmpty()) {
-                    setPanelMessage(uploadMessagePanel, model.getInvalidityReasons().get(0));
+                    setPanelMessage(messagePanel, model.getInvalidityReasons().get(0), AlertPanel.Type.WARNING);
                 }
             }
         });
@@ -182,26 +163,28 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
         if (!model.getBrowserSupportsUpload()) {
             model.getOkCommand().setIsExecutionAllowed(false);
             imageFileUpload.setEnabled(false);
-            setPanelMessage(uploadMessagePanel, constants.uploadImageUploadNotSupportedMessage());
+            setPanelMessage(messagePanel, constants.uploadImageUploadNotSupportedMessage(), AlertPanel.Type.DANGER);
             model.getImageSourceLocalEnabled().setEntity(false);
         }
     }
 
     private void setSourceVisibility(final UploadImageModel model) {
         imageFileUploadPanel.setVisible(model.getImageSourceLocalEnabled().getEntity());
-        imageFileDownloadPanel.setVisible(!model.getImageSourceLocalEnabled().getEntity());
     }
 
-    private void setPanelMessage(FlowPanel panel, String message) {
-        panel.clear();
-        panel.add(new Label(message));
-        panel.setVisible(message != null && !message.isEmpty());
+    private void setPanelMessage(AlertPanel panel, String message, AlertPanel.Type type) {
+        panel.clearMessages();
+        panel.setVisible(false);
+        if (message != null && !message.isEmpty()) {
+            panel.setType(type);
+            panel.addMessage(SafeHtmlUtils.fromString(message));
+            panel.setVisible(true);
+        }
     }
 
-    private void setDownloadMessage(String message) {
-        downloadMessagePanel.clear();
-        downloadMessagePanel.add(new Label(message));
-        downloadMessagePanel.setVisible(message != null && !message.isEmpty());
+    private void hidePanelMessage() {
+        messagePanel.clearMessages();
+        messagePanel.setVisible(false);
     }
 
     @Override
@@ -219,5 +202,31 @@ public class UploadImagePopupView extends AbstractModelBoundPopupView<UploadImag
     public int setTabIndexes(int nextTabIndex) {
         nextTabIndex = vmDiskPopupWidget.setTabIndexes(nextTabIndex);
         return nextTabIndex;
+    }
+
+    @Override
+    public HasUiCommandClickHandlers getTestButton() {
+        return testButton;
+    }
+
+    @Override
+    public void updateTestResult(boolean succeeded) {
+        messagePanel.clearMessages();
+        messagePanel.setVisible(true);
+        if (succeeded) {
+            messagePanel.setType(AlertPanel.Type.SUCCESS);
+            messagePanel.addMessage(SafeHtmlUtils.fromSafeConstant(
+                    constants.testImageIOProxyConnectionSuccess()));
+        } else {
+            messagePanel.setType(AlertPanel.Type.WARNING);
+            messagePanel.addMessage(SafeHtmlUtils.fromSafeConstant(
+                    messages.testImageIOProxyConnectionFailure(
+                            Window.Location.getProtocol() + "//" + Window.Location.getHost()))); //$NON-NLS-1$
+        }
+    }
+
+    @Override
+    public void showTestCommand(boolean show) {
+        testButton.setVisible(show);
     }
 }

@@ -178,12 +178,17 @@ public class VdsBrokerObjectsBuilder {
                 if (VdsProperties.Disk.equals(deviceMap.get(VdsProperties.Device))) {
                     DiskImage image = new DiskImage();
                     image.setDiskAlias((String) deviceMap.get(VdsProperties.Alias));
-                    image.setSize(Long.parseLong((String) deviceMap.get("apparentsize")));
-                    image.setActualSize(Long.parseLong((String) deviceMap.get("truesize")));
-                    image.setId(Guid.newGuid());
+                    Long size = assignLongValue(deviceMap, VdsProperties.disk_apparent_size);
+                    image.setSize(size != null ? size : 0);
+                    Double actualSize = assignDoubleValue(deviceMap, VdsProperties.disk_true_size);
+                    image.setActualSize(actualSize != null ? actualSize : 0);
                     image.setVolumeFormat(VolumeFormat.valueOf(((String) deviceMap.get(VdsProperties.Format)).toUpperCase()));
                     image.setShareable(false);
-                    image.setId(Guid.createGuidFromString((String) deviceMap.get(VdsProperties.DeviceId)));
+                    String id = assignStringValue(deviceMap, VdsProperties.DeviceId);
+                    if (id == null) {
+                        id = assignStringValue(deviceMap, VdsProperties.ImageId);
+                    }
+                    image.setId(Guid.createGuidFromString(id));
                     image.setImageId(Guid.createGuidFromString((String) deviceMap.get(VdsProperties.VolumeId)));
                     Guid domainId = Guid.createGuidFromString((String) deviceMap.get(VdsProperties.DomainId));
                     List<Guid> domainIds = Collections.singletonList(domainId);
@@ -198,6 +203,7 @@ public class VdsBrokerObjectsBuilder {
                         dve.setDiskInterface(DiskInterface.VirtIO);
                         break;
                     case "iscsi":
+                    case "scsi":
                         dve.setDiskInterface(DiskInterface.VirtIO_SCSI);
                         break;
                     case "ide":
@@ -229,7 +235,11 @@ public class VdsBrokerObjectsBuilder {
                     nic.setName((String) deviceMap.get(VdsProperties.Name));
                     // FIXME we can't deduce the network profile by the network name. its many to many.
                     nic.setNetworkName((String) deviceMap.get(VdsProperties.NETWORK));
-                    nic.setType(VmInterfaceType.valueOf((String) deviceMap.get(VdsProperties.NIC_TYPE)).getValue());
+                    String nicModel = (String) deviceMap.get(VdsProperties.NIC_TYPE);
+                    if ("virtio".equals(nicModel)) {
+                        nicModel = "pv";
+                    }
+                    nic.setType(VmInterfaceType.valueOf(nicModel).getValue());
                     if (deviceMap.containsKey(VdsProperties.Model)) {
                         String model = (String) deviceMap.get(VdsProperties.Model);
                         for (VmInterfaceType type : VmInterfaceType.values()) {
@@ -1779,6 +1789,25 @@ public class VdsBrokerObjectsBuilder {
         if (struct.containsKey(VdsProperties.netConfigDirty)) {
             vds.setNetConfigDirty(assignBoolValue(struct, VdsProperties.netConfigDirty));
         }
+
+        setVlanSpeeds(vds);
+    }
+
+    private static void setVlanSpeeds(VDS vds) {
+        List<VdsNetworkInterface> interfaces = vds.getInterfaces();
+        List<VdsNetworkInterface> vlans = interfaces
+                .stream()
+                .filter(iface -> NetworkCommonUtils.isVlan(iface))
+                .collect(Collectors.toList());
+
+        for (VdsNetworkInterface vlanIface : vlans) {
+            VdsNetworkInterface baseInterface = interfaces
+                    .stream()
+                    .filter(iface -> iface.getName().equals(vlanIface.getBaseInterface()))
+                    .findFirst()
+                    .get();
+            vlanIface.setSpeed(baseInterface.getSpeed());
+        }
     }
 
     /***
@@ -1860,8 +1889,13 @@ public class VdsBrokerObjectsBuilder {
                             iface.setType(iface.getType() | VdsInterfaceType.MANAGEMENT.getValue());
                         }
 
-                        iface.setIpv4Gateway(v4gateway);
-                        iface.setIpv6Gateway(v6gateway);
+                        if (StringUtils.isNotEmpty(v4gateway)) {
+                            iface.setIpv4Gateway(v4gateway);
+                        }
+
+                        if (StringUtils.isNotEmpty(v6gateway)) {
+                            iface.setIpv6Gateway(v6gateway);
+                        }
 
                         if (bridgedNetwork) {
                             addBootProtocol(effectiveProperties, iface);

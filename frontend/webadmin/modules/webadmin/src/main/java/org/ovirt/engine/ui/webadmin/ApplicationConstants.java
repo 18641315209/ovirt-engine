@@ -189,15 +189,21 @@ public interface ApplicationConstants extends CommonApplicationConstants {
 
     String descriptionLabel();
 
-    String exportLabel();
+    String externalLabel();
 
     String profilesLabel();
 
-    String exportCheckboxLabel();
+    String externalCheckboxLabel();
+
+    String physicalNetworkCheckboxLabel();
+
+    String physicalNetworkLabel();
+
+    String physicalNetworkDatacenterLabel();
+
+    String physicalNetworkCustomLabel();
 
     String externalProviderLabel();
-
-    String neutronPhysicalNetwork();
 
     String hostProviderTabLabel();
 
@@ -257,6 +263,10 @@ public interface ApplicationConstants extends CommonApplicationConstants {
     String downloadImageStart();
 
     String downloadImageCancel();
+
+    String testImageIOProxyConnection();
+
+    String testImageIOProxyConnectionSuccess();
 
     String storageTypeShared();
 
@@ -1407,8 +1417,6 @@ public interface ApplicationConstants extends CommonApplicationConstants {
     String uploadImageSourceRemote();
 
     String uploadImageFileLabel();
-
-    String uploadImageUriLabel();
 
     String uploadImageUploadNotSupportedMessage();
 
@@ -3327,6 +3335,8 @@ public interface ApplicationConstants extends CommonApplicationConstants {
 
     String hostedEngineStorageTooltip();
 
+    String isUnmanaged();
+
     String haActiveTooltip();
 
     String haActiveZeroHaScoreTooltip();
@@ -3386,5 +3396,17 @@ public interface ApplicationConstants extends CommonApplicationConstants {
     String logicalNetwork();
 
     String slave();
+
+    String hostHasDisabledPowerManagment();
+
+    String hostNetConfigurationDirty();
+
+    String hostGlusterIssues();
+
+    String hostReinstallRequired();
+
+    String hostHasNoDefaultRoute();
+
+    String autoDetect();
 }
 

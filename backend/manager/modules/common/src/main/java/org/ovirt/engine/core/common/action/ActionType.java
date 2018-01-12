@@ -37,6 +37,7 @@ public enum ActionType {
     UpdateVmInterface(30, ActionGroup.CONFIGURE_VM_NETWORK, false, QuotaDependency.NONE),
     AddDisk(31, ActionGroup.CONFIGURE_VM_STORAGE, QuotaDependency.STORAGE),
     RegisterDisk(32, ActionGroup.CONFIGURE_VM_STORAGE, QuotaDependency.STORAGE),
+    ExtractOva(33, QuotaDependency.NONE),
     UpdateVmDisk(34, ActionGroup.CONFIGURE_VM_STORAGE, false, QuotaDependency.STORAGE),
     AttachDiskToVm(180, ActionGroup.CONFIGURE_VM_STORAGE, false, QuotaDependency.NONE),
     DetachDiskFromVm(181, ActionGroup.CONFIGURE_VM_STORAGE, false, QuotaDependency.NONE),
@@ -416,6 +417,10 @@ public enum ActionType {
     EditClusterPolicy(1451, ActionGroup.EDIT_STORAGE_POOL_CONFIGURATION, false, QuotaDependency.NONE),
     RemoveClusterPolicy(1452, ActionGroup.EDIT_STORAGE_POOL_CONFIGURATION, false, QuotaDependency.NONE),
     RemoveExternalPolicyUnit(1453, ActionGroup.EDIT_STORAGE_POOL_CONFIGURATION, false, QuotaDependency.NONE),
+
+    // Gluster events continued...
+    AddGlusterWebhookInternal(1454, QuotaDependency.NONE),
+
     // External events
     AddExternalEvent(1500, ActionGroup.INJECT_EXTERNAL_EVENTS, QuotaDependency.NONE),
 
@@ -426,6 +431,7 @@ public enum ActionType {
     TestProviderConnectivity(1603, false, QuotaDependency.NONE),
     ImportProviderCertificate(1604, false, QuotaDependency.NONE),
     AddNetworkOnProvider(1605, ActionGroup.CREATE_STORAGE_POOL_NETWORK, false, QuotaDependency.NONE),
+    AddNetworkWithSubnetOnProvider(1608, ActionGroup.CREATE_STORAGE_POOL_NETWORK, false, QuotaDependency.NONE),
     AddSubnetToProvider(1606, false, QuotaDependency.NONE),
     RemoveSubnetFromProvider(1607, false, QuotaDependency.NONE),
 

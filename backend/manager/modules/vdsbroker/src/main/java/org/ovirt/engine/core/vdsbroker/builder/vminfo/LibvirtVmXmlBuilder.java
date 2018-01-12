@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -42,6 +44,7 @@ import org.ovirt.engine.core.common.businessentities.network.Network;
 import org.ovirt.engine.core.common.businessentities.network.NetworkFilter;
 import org.ovirt.engine.core.common.businessentities.network.VmInterfaceType;
 import org.ovirt.engine.core.common.businessentities.network.VmNetworkInterface;
+import org.ovirt.engine.core.common.businessentities.network.VmNic;
 import org.ovirt.engine.core.common.businessentities.network.VnicProfile;
 import org.ovirt.engine.core.common.businessentities.qos.StorageQos;
 import org.ovirt.engine.core.common.businessentities.storage.CinderDisk;
@@ -58,6 +61,7 @@ import org.ovirt.engine.core.common.config.ConfigValues;
 import org.ovirt.engine.core.common.osinfo.OsRepository;
 import org.ovirt.engine.core.common.utils.HugePageUtils;
 import org.ovirt.engine.core.common.utils.Pair;
+import org.ovirt.engine.core.common.utils.ValidationUtils;
 import org.ovirt.engine.core.common.utils.VmCpuCountHelper;
 import org.ovirt.engine.core.common.utils.VmDeviceCommonUtils;
 import org.ovirt.engine.core.common.utils.VmDeviceType;
@@ -153,6 +157,10 @@ public class LibvirtVmXmlBuilder {
     private Map<String, Map<String, Object>> diskMetadata;
     private Pair<String, VmPayload> payloadMetadata;
 
+    /** Hot-set fields */
+    private VmNic nic;
+    private VmDevice device;
+
     public LibvirtVmXmlBuilder(
             Map<String, Object> createInfo,
             VM vm,
@@ -167,10 +175,23 @@ public class LibvirtVmXmlBuilder {
         this.vdsCpuThreads = vdsCpuThreads;
         this.volatileRun = volatileRun;
         this.passthroughVnicToVfMap = passthroughVnicToVfMap;
-        payloadIndex = -1;
-        cdRomIndex = -1;
-        vnicMetadata = new HashMap<>();
-        diskMetadata = new HashMap<>();
+        initHostSpecificSuppliers(hostId);
+    }
+
+    public LibvirtVmXmlBuilder(
+            VM vm,
+            Guid hostId,
+            VmNic nic,
+            VmDevice device,
+            Map<Guid, String> passthroughVnicToVfMap) {
+        this.vm = vm;
+        this.passthroughVnicToVfMap = passthroughVnicToVfMap;
+        this.nic = nic;
+        this.device = device;
+        initHostSpecificSuppliers(hostId);
+    }
+
+    private void initHostSpecificSuppliers(Guid hostId) {
         hostDevicesSupplier = new MemoizingSupplier<>(() -> hostDeviceDao.getHostDevicesByHostId(hostId)
                 .stream()
                 .collect(Collectors.toMap(HostDevice::getDeviceName, device -> device)));
@@ -180,6 +201,10 @@ public class LibvirtVmXmlBuilder {
 
     @PostConstruct
     private void init() {
+        payloadIndex = -1;
+        cdRomIndex = -1;
+        vnicMetadata = new HashMap<>();
+        diskMetadata = new HashMap<>();
         hypervEnabled = osRepository.isHypervEnabled(vm.getVmOsId(), vm.getCompatibilityVersion());
         cdInterface = osRepository.getCdInterface(
                 vm.getOs(),
@@ -189,7 +214,7 @@ public class LibvirtVmXmlBuilder {
         qosCache = new HashMap<>();
     }
 
-    public String build() {
+    public String buildCreateVm() {
         writeHeader();
         writeName();
         writeId();
@@ -210,6 +235,25 @@ public class LibvirtVmXmlBuilder {
         writeOs();
         writeMemoryBacking();
         writeMetadata();
+        return writer.getStringXML();
+    }
+
+    public String buildHotplugNic() {
+        writer.writeStartDocument(false);
+        writer.writeStartElement("hotplug");
+
+        writer.writeStartElement("devices");
+        writeInterface(device, nic);
+        writer.writeEndElement();
+
+        writer.writeStartElement("metadata");
+        writer.setPrefix(OVIRT_VM_PREFIX, OVIRT_VM_URI);
+        writer.writeNamespace(OVIRT_VM_PREFIX, OVIRT_VM_URI);
+        writer.writeStartElement(OVIRT_VM_URI, "vm");
+        writeNetworkInterfaceMetadata();
+        writer.writeEndElement();
+        writer.writeEndElement();
+
         return writer.getStringXML();
     }
 
@@ -1067,7 +1111,8 @@ public class LibvirtVmXmlBuilder {
             }
 
             if (device.isManaged()) {
-                writeManagedDisk(device, disk, dve, index);
+                String dev = vmInfoBuildUtils.makeDiskName(dve.getDiskInterface().getName(), index);
+                writeManagedDisk(device, disk, dve, dev);
             }
             // TODO: else
         }
@@ -1488,7 +1533,7 @@ public class LibvirtVmXmlBuilder {
             VmDevice device,
             Disk disk,
             DiskVmElement dve,
-            int index) {
+            String dev) {
         // <disk type='file' device='disk' snapshot='no'>
         //   <driver name='qemu' type='qcow2' cache='none'/>
         //   <source file='/path/to/image'/>
@@ -1498,7 +1543,7 @@ public class LibvirtVmXmlBuilder {
         writer.writeStartElement("disk");
 
         writeGeneralDiskAttributes(device, disk, dve);
-        String dev = writeDiskTarget(dve, index);
+        writeDiskTarget(dve, dev);
         writeDiskSource(disk, dev);
         writeDiskDriver(device, disk, dve);
         writeAddress(device);
@@ -1617,46 +1662,40 @@ public class LibvirtVmXmlBuilder {
         case IMAGE:
             DiskImage diskImage = (DiskImage) disk;
             String diskType = this.vmInfoBuildUtils.getDiskType(this.vm, diskImage);
+
             switch (diskType) {
             case "block":
                 writer.writeAttributeString(
-                        "dev",
-                        String.format("/rhev/data-center/mnt/blockSD/%s/images/%s/%s",
-                                diskImage.getStorageIds().get(0),
-                                diskImage.getId(),
-                                diskImage.getImageId()));
-                break;
-            case "file":
-                writer.writeAttributeString(
-                        "file",
-                        String.format("/rhev/data-center/%s/%s/images/%s/%s",
-                                diskImage.getStoragePoolId(),
-                                diskImage.getStorageIds().get(0),
-                                diskImage.getId(),
-                                diskImage.getImageId()));
+                        "dev", vmInfoBuildUtils.getPathToImage(diskImage));
                 break;
             case "network":
-                writer.writeAttributeString("protocol", "gluster");
                 String[] volInfo = vmInfoBuildUtils.getGlusterVolInfo(disk);
+                // Sometimes gluster methods return garbage instead of
+                // correct volume info string and, as we can't parse it,
+                // we will have a null volInfo. In that case we will just
+                //drop to the 'file' case as a fallback.
+                if (volInfo != null) {
+                    writer.writeAttributeString("protocol", "gluster");
+                    writer.writeAttributeString(
+                            "name",
+                            String.format("%s/%s/images/%s/%s",
+                                    volInfo[1],
+                                    diskImage.getStorageIds().get(0),
+                                    diskImage.getId(),
+                                    diskImage.getImageId()));
+                    writer.writeStartElement("host");
+                    writer.writeAttributeString("name", volInfo[0]);
+                    writer.writeAttributeString("port", "0");
+                    writer.writeEndElement();
+                    break;
+                }
+            case "file":
                 writer.writeAttributeString(
-                        "name",
-                        String.format("%s/%s/images/%s/%s",
-                                volInfo[1],
-                                diskImage.getStorageIds().get(0),
-                                diskImage.getId(),
-                                diskImage.getImageId()));
-                writer.writeStartElement("host");
-                writer.writeAttributeString("name", volInfo[0]);
-                writer.writeAttributeString("port", "0");
-                writer.writeEndElement();
+                        "file", vmInfoBuildUtils.getPathToImage(diskImage));
                 break;
             }
-            Map<String, Object> diskUuids = new HashMap<>();
-            diskUuids.put("poolID", diskImage.getStoragePoolId());
-            diskUuids.put("domainID", diskImage.getStorageIds().get(0));
-            diskUuids.put("imageID", diskImage.getId());
-            diskUuids.put("volumeID", diskImage.getImageId());
-            diskMetadata.put(dev, diskUuids);
+            diskMetadata.put(dev, createDiskParams(diskImage));
+
             break;
 
         case LUN:
@@ -1690,24 +1729,41 @@ public class LibvirtVmXmlBuilder {
         writer.writeEndElement();
     }
 
-    private String writeDiskTarget(DiskVmElement dve, int index) {
-        String dev = null;
+    private Map<String, Object> createDiskParams(DiskImage diskImage) {
+        Map<String, Object> diskParams =
+                createDiskUuidsMap(diskImage.getStoragePoolId(),
+                        diskImage.getStorageIds().get(0),
+                        diskImage.getId(),
+                        diskImage.getImageId());
+        if (!diskImage.getActive()) {
+            diskParams.put(VdsProperties.Shareable, VdsProperties.Transient);
+        }
+        return diskParams;
+    }
+
+    private Map<String, Object> createDiskUuidsMap(Guid poolId, Guid domainId, Guid imageId, Guid volumeId) {
+        Map<String, Object> diskUuids = new HashMap<>();
+        diskUuids.put("poolID", poolId);
+        diskUuids.put("domainID", domainId);
+        diskUuids.put("imageID", imageId);
+        diskUuids.put("volumeID", volumeId);
+        return diskUuids;
+    }
+
+    private void writeDiskTarget(DiskVmElement dve, String dev) {
         writer.writeStartElement("target");
         switch (dve.getDiskInterface()) {
         case IDE:
-            dev = vmInfoBuildUtils.makeDiskName("ide", index);
             writer.writeAttributeString("dev", dev);
             writer.writeAttributeString("bus", "ide");
             break;
         case VirtIO:
-            dev = vmInfoBuildUtils.makeDiskName("virtio", index);
             writer.writeAttributeString("dev", dev);
             writer.writeAttributeString("bus", "virtio");
 
             // TODO: index
             break;
         case VirtIO_SCSI:
-            dev = vmInfoBuildUtils.makeDiskName("scsi", index);
             writer.writeAttributeString("dev", dev);
             writer.writeAttributeString("bus", "scsi");
 
@@ -1720,7 +1776,6 @@ public class LibvirtVmXmlBuilder {
             log.error("Unsupported interface type, ISCSI interface type is not supported.");
         }
         writer.writeEndElement();
-        return dev;
     }
 
     private void writeGeneralDiskAttributes(VmDevice device, Disk disk, DiskVmElement dve) {
@@ -1842,8 +1897,25 @@ public class LibvirtVmXmlBuilder {
                 .findAny().orElse(null);
         if (nonPayload != null || (vm.isRunOnce() && !StringUtils.isEmpty(vm.getCdPath()))) {
             // add a device that points to vm.getCdPath()
+            cdRomIndex = VmDeviceCommonUtils.getCdDeviceIndex(cdInterface);
+
+            boolean isoOnBlockDomain = false;
+            if (vm.getIsoPath() != null && vm.getIsoPath().matches(ValidationUtils.GUID)
+                    && vmInfoBuildUtils.isBlockDomainPath(vm.getCdPath())) {
+                isoOnBlockDomain = true;
+                String dev = vmInfoBuildUtils.makeDiskName(cdInterface, cdRomIndex);
+                Matcher m = Pattern.compile(ValidationUtils.GUID).matcher(vm.getCdPath());
+                m.find();
+                Guid domainId = Guid.createGuidFromString(m.group());
+                m.find();
+                Guid imageId = Guid.createGuidFromString(m.group());
+                m.find();
+                Guid volumeId = Guid.createGuidFromString(m.group());
+                diskMetadata.put(dev, createDiskUuidsMap(vm.getStoragePoolId(), domainId, imageId, volumeId));
+            }
+
             writer.writeStartElement("disk");
-            writer.writeAttributeString("type", "file");
+            writer.writeAttributeString("type", isoOnBlockDomain ? "block" : "file");
             writer.writeAttributeString("device", "cdrom");
             writer.writeAttributeString("snapshot", "no");
 
@@ -1854,11 +1926,9 @@ public class LibvirtVmXmlBuilder {
             writer.writeEndElement();
 
             writer.writeStartElement("source");
-            writer.writeAttributeString("file", vm.getCdPath());
+            writer.writeAttributeString(isoOnBlockDomain ? "dev" : "file", vm.getCdPath());
             writer.writeAttributeString("startupPolicy", "optional");
             writer.writeEndElement();
-
-            cdRomIndex = VmDeviceCommonUtils.getCdDeviceIndex(cdInterface);
 
             writer.writeStartElement("target");
             writer.writeAttributeString("dev", vmInfoBuildUtils.makeDiskName(cdInterface, cdRomIndex));
@@ -1877,7 +1947,7 @@ public class LibvirtVmXmlBuilder {
 
     }
 
-    private void writeInterface(VmDevice device, VmNetworkInterface nic) {
+    private void writeInterface(VmDevice device, VmNic nic) {
         //  <interface type="bridge">
         //    <mac address="aa:bb:dd:dd:aa:bb"/>
         //    <model type="virtio"/>
@@ -1921,8 +1991,14 @@ public class LibvirtVmXmlBuilder {
         case "bridge":
             writer.writeAttributeString("type", "bridge");
             writer.writeStartElement("model");
-            VmInterfaceType ifaceType = nic.getType() != null ? VmInterfaceType.forValue(nic.getType()) : VmInterfaceType.rtl8139;
-            writer.writeAttributeString("type", ifaceType == VmInterfaceType.pv ? "virtio" : ifaceType.getInternalName());
+            VmInterfaceType ifaceType = nic.getType() != null ?
+                    VmInterfaceType.forValue(nic.getType())
+                    : VmInterfaceType.rtl8139;
+            String evaluatedIfaceType = vmInfoBuildUtils.evaluateInterfaceType(ifaceType, vm.getHasAgent());
+            if ("pv".equals(evaluatedIfaceType)) {
+                evaluatedIfaceType = "virtio";
+            }
+            writer.writeAttributeString("type", evaluatedIfaceType);
             writer.writeEndElement();
 
             writer.writeStartElement("link");
@@ -1935,7 +2011,7 @@ public class LibvirtVmXmlBuilder {
             writer.writeEndElement();
 
             String queues = vnicProfile != null ? vnicProfile.getCustomProperties().remove("queues") : null;
-            String driverName = getDriverNameForNetwork(nic.getNetworkName(), properties);
+            String driverName = getDriverNameForNetwork(network != null ? network.getName() : "", properties);
             if (queues != null || driverName != null) {
                 writer.writeStartElement("driver");
                 if (queues != null) {
@@ -1968,7 +2044,7 @@ public class LibvirtVmXmlBuilder {
             String vfDeviceName = passthroughVnicToVfMap.get(nic.getId());
             Map<String, String> sourceAddress = hostDevicesSupplier.get().get(vfDeviceName).getAddress();
             sourceAddress.put("type", "pci");
-            sourceAddress.forEach((key, value) -> writer.writeAttributeString(key, value));
+            sourceAddress.forEach(writer::writeAttributeString);
             writer.writeEndElement();
             writer.writeEndElement();
             break;
@@ -2157,7 +2233,7 @@ public class LibvirtVmXmlBuilder {
     private void writeAddress(Map<String, String> addressMap) {
         if (!addressMap.isEmpty()) {
             writer.writeStartElement("address");
-            addressMap.forEach((key, value) -> writer.writeAttributeString(key, value));
+            addressMap.forEach(writer::writeAttributeString);
             writer.writeEndElement();
         }
     }

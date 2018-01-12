@@ -42,6 +42,7 @@ import org.ovirt.engine.ui.uicommonweb.models.ConfirmationModel;
 import org.ovirt.engine.ui.uicommonweb.models.EntityModel;
 import org.ovirt.engine.ui.uicommonweb.models.HasEntity;
 import org.ovirt.engine.ui.uicommonweb.models.ListWithSimpleDetailsModel;
+import org.ovirt.engine.ui.uicommonweb.models.SearchStringMapping;
 import org.ovirt.engine.ui.uicommonweb.models.TabName;
 import org.ovirt.engine.ui.uicommonweb.models.configure.PermissionListModel;
 import org.ovirt.engine.ui.uicommonweb.models.vms.ExistingPoolModelBehavior;
@@ -119,7 +120,7 @@ public class PoolListModel extends ListWithSimpleDetailsModel<Void, VmPool> {
         setTitle(ConstantsManager.getInstance().getConstants().poolsTitle());
         setApplicationPlace(WebAdminApplicationPlaces.poolMainPlace);
 
-        setDefaultSearchString("Pools:"); //$NON-NLS-1$
+        setDefaultSearchString(SearchStringMapping.POOLS_DEFAULT_SEARCH + ":"); //$NON-NLS-1$
         setSearchString(getDefaultSearchString());
         setSearchObjects(new String[] { SearchObjects.VDC_POOL_OBJ_NAME, SearchObjects.VDC_POOL_PLU_OBJ_NAME });
         setAvailableInModes(ApplicationMode.VirtOnly);
@@ -231,9 +232,6 @@ public class PoolListModel extends ListWithSimpleDetailsModel<Void, VmPool> {
                         boolean hasCd = !StringHelper.isNullOrEmpty(cdImage);
                         model.getCdImage().setIsChangeable(hasCd);
                         model.getCdAttached().setEntity(hasCd);
-                        if (hasCd) {
-                            model.getCdImage().setSelectedItem(cdImage);
-                        }
 
                         model.getProvisioning().setIsChangeable(false);
                         model.getStorageDomain().setIsChangeable(false);
@@ -324,8 +322,10 @@ public class PoolListModel extends ListWithSimpleDetailsModel<Void, VmPool> {
 
         Frontend.getInstance().runMultipleAction(ActionType.RemoveVmPool, list,
                 result -> {
-
                     ConfirmationModel localModel = (ConfirmationModel) result.getState();
+                    if (result.getReturnValue().stream().anyMatch(rv -> !rv.isValid())) {
+                        restorePreviousSelectedItem();
+                    }
                     localModel.stopProgress();
                     cancel();
                 }, model);
@@ -595,13 +595,13 @@ public class PoolListModel extends ListWithSimpleDetailsModel<Void, VmPool> {
                 && model.getCpuPinning().getEntity() != null && !model.getCpuPinning().getEntity().isEmpty();
         confirmModel.addRecommendationForCpuPinning(isVmAssignedToSpecificHosts, isVmCpuPinningSet);
 
-        // Handle KSM (Kernel Same Page Merging)
-        confirmModel.addRecommendationForKsm(model.getSelectedCluster().isEnableKsm(), model.getSelectedCluster().getName());
-
         // Handle Huge Pages
         KeyValueModel keyValue = model.getCustomPropertySheet();
         final boolean isVmHugePagesSet = keyValue != null && keyValue.getUsedKeys().contains("hugepages"); //$NON-NLS-1$
         confirmModel.addRecommendationForHugePages(isVmHugePagesSet);
+
+        // Handle KSM (Kernel Same Page Merging)
+        confirmModel.addRecommendationForKsm(model.getSelectedCluster().isEnableKsm(), model.getSelectedCluster().getName());
 
         if (!confirmModel.getRecommendationsList().isEmpty()) {
             confirmModel.setTitle(ConstantsManager.getInstance()

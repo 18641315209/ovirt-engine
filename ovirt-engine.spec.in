@@ -313,7 +313,7 @@ Requires:	openvswitch
 Requires:	openvswitch-ovn-common
 Requires:	openvswitch-ovn-central
 Requires:	python-openvswitch
-Requires:	ovirt-provider-ovn
+Requires:	ovirt-provider-ovn >= 1.2.1
 
 %description
 %{ovirt_product_name} is a feature-rich server virtualization management
@@ -364,7 +364,7 @@ Requires:	mailcap
 Requires:	mod_ssl
 Requires:	novnc >= 0.5.0, novnc < 0.6.0
 Requires:	openssh
-Requires:	vdsm-jsonrpc-java >= 1.4.9
+Requires:	vdsm-jsonrpc-java >= 1.4.11
 Requires:	openssl
 Requires:	ovirt-engine-extension-aaa-jdbc
 Requires:	ovirt-host-deploy-java >= 1.6.3
@@ -447,8 +447,9 @@ Requires:       postgresql-server >= 9.5
 Conflicts:	%{name} < 4.1.7
 
 # OVS/OVN stuff, for firewalld service files
-Requires:	openvswitch-ovn-central
-Requires:	ovirt-provider-ovn
+Requires:	openvswitch-ovn-central >= 0:2.7
+Conflicts:	openvswitch-ovn-central = 1:2.6.1
+Requires:	ovirt-provider-ovn >= 1.2.1
 
 %description setup-plugin-ovirt-engine
 Setup and upgrade specific plugins for %{ovirt_product_name_short}
@@ -657,7 +658,7 @@ rm -f "%{buildroot}%{python3_sitelib}"/ovirt_engine/{service,ticket}.py
 # /var creation
 #
 install -dm 755 "%{buildroot}/%{engine_state}"/{content,setup/answers}
-install -dm 755 "%{buildroot}/%{engine_log}"/{create-ova,host-deploy,setup,notifier,dump,ansible}
+install -dm 755 "%{buildroot}/%{engine_log}"/{ova,host-deploy,setup,notifier,dump,ansible}
 install -dm 755 "%{buildroot}/%{engine_cache}"
 install -dm 755 "%{buildroot}/%{engine_run}/notifier"
 
@@ -1149,6 +1150,8 @@ fi
 %{engine_data}/playbooks/ovirt-host-remove.yml
 %{engine_data}/playbooks/ovirt-host-upgrade.yml
 %{engine_data}/playbooks/ovirt-ova-export.yml
+%{engine_data}/playbooks/ovirt-ova-import.yml
+%{engine_data}/playbooks/ovirt-ova-query.yml
 %{engine_data}/playbooks/roles/
 %{engine_data}/services/ovirt-engine-notifier
 %{engine_data}/services/ovirt-fence-kdump-listener/
@@ -1172,6 +1175,15 @@ fi
 %{engine_data}/setup/bin/ovirt-engine-health
 
 %changelog
+* Thu Jan 04 2018 Lev Veyde <lveyde@redhat.com> - 4.2.1
+- Bump version to 4.2.1
+
+* Mon Dec 11 2017 Sandro Bonazzola <sbonazzo@redhat.com> - 4.2.0.2
+- Bump version to 4.2.0.2
+
+* Mon Dec 11 2017 Sandro Bonazzola <sbonazzo@redhat.com> - 4.2.0.1
+- Bump version to 4.2.0.1
+
 * Mon Nov 27 2017 Sandro Bonazzola <sbonazzo@redhat.com> - 4.2.0
 - Bump version to 4.2.0
 

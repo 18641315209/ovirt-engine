@@ -2,7 +2,7 @@ package org.ovirt.engine.core.bll;
 
 import static org.ovirt.engine.core.bll.validator.CpuPinningValidator.isCpuPinningValid;
 
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -14,7 +14,6 @@ import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
-import org.apache.commons.codec.CharEncoding;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang.StringUtils;
@@ -46,7 +45,6 @@ import org.ovirt.engine.core.common.action.LockProperties.Scope;
 import org.ovirt.engine.core.common.action.PlugAction;
 import org.ovirt.engine.core.common.action.RngDeviceParameters;
 import org.ovirt.engine.core.common.action.UpdateVmVersionParameters;
-import org.ovirt.engine.core.common.action.VmLeaseParameters;
 import org.ovirt.engine.core.common.action.VmManagementParametersBase;
 import org.ovirt.engine.core.common.action.VmNumaNodeOperationParameters;
 import org.ovirt.engine.core.common.action.WatchdogParameters;
@@ -85,6 +83,7 @@ import org.ovirt.engine.core.common.locks.LockingGroup;
 import org.ovirt.engine.core.common.queries.IdQueryParameters;
 import org.ovirt.engine.core.common.queries.QueryReturnValue;
 import org.ovirt.engine.core.common.queries.QueryType;
+import org.ovirt.engine.core.common.utils.HugePageUtils;
 import org.ovirt.engine.core.common.utils.Pair;
 import org.ovirt.engine.core.common.utils.VmCommonUtils;
 import org.ovirt.engine.core.common.utils.VmCpuCountHelper;
@@ -215,7 +214,7 @@ public class UpdateVmCommand<T extends VmManagementParametersBase> extends VmMan
 
     @Override
     protected LockProperties applyLockProperties(LockProperties lockProperties) {
-        return lockProperties.withScope(Scope.Execution);
+        return lockProperties.withScope(Scope.Command);
     }
 
     @Override
@@ -238,14 +237,13 @@ public class UpdateVmCommand<T extends VmManagementParametersBase> extends VmMan
             vmHandler.createNextRunSnapshot(
                     getVm(), getParameters().getVmStaticData(), getParameters(), getCompensationContext());
             vmHandler.setVmDestroyOnReboot(getVm());
-        } else if (!updateVmLease()) {
-            return;
         }
 
         vmHandler.warnMemorySizeLegal(getParameters().getVm().getStaticData(), getEffectiveCompatibilityVersion());
         vmStaticDao.incrementDbGeneration(getVm().getId());
         newVmStatic.setCreationDate(oldVm.getStaticData().getCreationDate());
         newVmStatic.setQuotaId(getQuotaId());
+        newVmStatic.setLeaseInfo(oldVm.getStaticData().getLeaseInfo());
 
         // Trigger OVF update for hosted engine VM only
         if (getVm().isHostedEngine()) {
@@ -294,6 +292,9 @@ public class UpdateVmCommand<T extends VmManagementParametersBase> extends VmMan
         updateVmNetworks();
         updateVmNumaNodes();
         updateAffinityLabels();
+        if (!updateVmLease()) {
+            return;
+        }
 
         if (isHotSetEnabled()) {
             hotSetCpus(userVm);
@@ -326,22 +327,20 @@ public class UpdateVmCommand<T extends VmManagementParametersBase> extends VmMan
 
         getVm().getStaticData().setLeaseInfo(null);
         if (getVm().isNotRunning()) {
-            if (!addVmLease(newVmStatic.getLeaseStorageDomainId(), newVmStatic.getId())) {
+            if (!addVmLease(newVmStatic.getLeaseStorageDomainId(), newVmStatic.getId(), false)) {
                 return false;
             }
         }
-        else {
+        else if (isHotSetEnabled()) {
             if (oldVm.getLeaseStorageDomainId() == null) {
-                VmLeaseParameters params = new VmLeaseParameters(getStoragePoolId(),
-                        newVmStatic.getLeaseStorageDomainId(), newVmStatic.getId());
-                params.setVdsId(getVm().getRunOnVds());
-                params.setHotPlugLease(true);
-                return runInternalAction(ActionType.AddVmLease, params).getSucceeded();
+                return addVmLease(newVmStatic.getLeaseStorageDomainId(), newVmStatic.getId(), true);
             }
             boolean hotUnplugSucceeded = false;
             try {
                 hotUnplugSucceeded = runVdsCommand(VDSCommandType.HotUnplugLease,
-                        new LeaseVDSParameters(getVm().getRunOnVds(), oldVm.getId(), oldVm.getLeaseStorageDomainId())).getSucceeded();
+                        new LeaseVDSParameters(getVm().getRunOnVds(),
+                                oldVm.getId(),
+                                oldVm.getLeaseStorageDomainId())).getSucceeded();
             } catch (EngineException e) {
                 log.error("Failure in hot unplugging a lease to VM {}, message: {}",
                         oldVm.getId(), e.getMessage());
@@ -350,7 +349,11 @@ public class UpdateVmCommand<T extends VmManagementParametersBase> extends VmMan
                 auditLog(this, AuditLogType.HOT_UNPLUG_LEASE_FAILED);
             }
         }
+        // In case of remove lease only, VM lease info should set to null
+        if (oldVm.getLeaseStorageDomainId() != null && newVmStatic.getLeaseStorageDomainId() == null) {
+            newVmStatic.setLeaseInfo(null);
 
+        }
         // best effort to remove the lease from the previous storage domain
         removeVmLease(oldVm.getLeaseStorageDomainId(), oldVm.getId());
         return true;
@@ -994,7 +997,7 @@ public class UpdateVmCommand<T extends VmManagementParametersBase> extends VmMan
             }
             // we save the content in base64 string
             for (Map.Entry<String, String> entry : getParameters().getVmPayload().getFiles().entrySet()) {
-                entry.setValue(new String(BASE_64.encode(entry.getValue().getBytes()), Charset.forName(CharEncoding.UTF_8)));
+                entry.setValue(new String(BASE_64.encode(entry.getValue().getBytes()), StandardCharsets.UTF_8));
             }
         }
 
@@ -1177,6 +1180,17 @@ public class UpdateVmCommand<T extends VmManagementParametersBase> extends VmMan
                             "compatibilityVersion", getVm().getCompatibilityVersion()),
                     ReplacementUtils.createSetVariableString(
                             "architecture", getVm().getClusterArch()));
+        }
+
+        if (vmFromDB.getMemSizeMb() != vmFromParams.getMemSizeMb() &&
+                vmFromDB.isRunning() &&
+                isHotSetEnabled() &&
+                HugePageUtils.isBackedByHugepages(vmFromDB.getStaticData()) &&
+                (vmFromDB.getMemSizeMb() < vmFromParams.getMemSizeMb() ||
+                        (vmFromDB.getMemSizeMb() > vmFromParams.getMemSizeMb() &&
+                                getParameters().isMemoryHotUnplugEnabled()))
+                ) {
+            return failValidation(EngineMessage.ACTION_TYPE_FAILED_MEMORY_HOT_SET_NOT_SUPPORTED_FOR_HUGE_PAGES);
         }
 
         return true;

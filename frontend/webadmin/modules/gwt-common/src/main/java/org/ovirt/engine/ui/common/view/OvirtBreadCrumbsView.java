@@ -25,6 +25,7 @@ import com.google.gwt.safehtml.shared.SafeHtml;
 import com.google.gwt.safehtml.shared.SafeHtmlUtils;
 import com.google.gwt.uibinder.client.UiBinder;
 import com.google.gwt.uibinder.client.UiField;
+import com.google.gwt.user.client.ui.FlowPanel;
 import com.google.gwt.user.client.ui.IsWidget;
 import com.google.gwt.user.client.ui.Widget;
 
@@ -41,6 +42,9 @@ public class OvirtBreadCrumbsView<T, M extends SearchableListModel> extends Abst
     @UiField
     Breadcrumbs breadCrumbs;
 
+    @UiField
+    FlowPanel container;
+
     private OvirtPopover popover;
     private ListModelSearchBox<T, ?> searchBox;
     private ListModelSelectedCallback<T> selectionCallback;
@@ -49,6 +53,7 @@ public class OvirtBreadCrumbsView<T, M extends SearchableListModel> extends Abst
     private final MenuDetailsProvider menuDetailsProvider;
 
     IsWidget currentSelectedItemWidget;
+    private boolean hideSelectedWidget = false;
 
     @Inject
     public OvirtBreadCrumbsView(MainModelProvider<T, M> listModelProvider, MenuDetailsProvider menuDetailsProvider) {
@@ -60,21 +65,23 @@ public class OvirtBreadCrumbsView<T, M extends SearchableListModel> extends Abst
     @Override
     public void buildCrumbs(String modelTitle, String modelHref) {
         // Clear the existing path.
-        breadCrumbs.clear();
+        container.clear();
+        breadCrumbs = new Breadcrumbs();
+        container.add(breadCrumbs);
 
         // Add primary menu label.
         String primaryLabel = menuDetailsProvider.getLabelFromHref(modelHref);
         if (primaryLabel != null) {
             breadCrumbs.add(new ListItem(primaryLabel));
         }
-        menuDetailsProvider.setPrimaryMenuActive(modelHref);
+        menuDetailsProvider.setMenuActive(modelHref);
 
         // Add main model name.
         AnchorListItem mainModelAnchor = new AnchorListItem(modelTitle);
         mainModelAnchor.setHref("#" + modelHref); //$NON-NLS-1$
         breadCrumbs.add(mainModelAnchor);
 
-        if (currentSelectedItemWidget != null) {
+        if (currentSelectedItemWidget != null && !hideSelectedWidget) {
             breadCrumbs.add(currentSelectedItemWidget);
         }
     }
@@ -166,12 +173,17 @@ public class OvirtBreadCrumbsView<T, M extends SearchableListModel> extends Abst
 
     @Override
     public boolean isSearchVisible() {
-        return popover.isVisible();
+        return popover != null && popover.isVisible();
     }
 
     private static class OvirtAnchorListItem extends AnchorListItem {
         public Anchor getAnchor() {
             return anchor;
         }
+    }
+
+    @Override
+    public void hideSelectedWidget() {
+        this.hideSelectedWidget = true;
     }
 }

@@ -311,8 +311,7 @@ FROM (
         NULL AS vendor_id,
         NULL AS product_id,
         NULL AS device_size,
-        NULL AS discard_max_size,
-        NULL AS discard_zeroes_data
+        NULL AS discard_max_size
     FROM images_storage_domain_view
     INNER JOIN storage_for_image_view
         ON images_storage_domain_view.image_guid = storage_for_image_view.image_id
@@ -415,8 +414,7 @@ FROM (
         l.vendor_id,
         l.product_id,
         l.device_size,
-        l.discard_max_size,
-        l.discard_zeroes_data
+        l.discard_max_size
     FROM disk_lun_map dlm
     INNER JOIN luns l
         ON l.lun_id = dlm.lun_id
@@ -498,8 +496,7 @@ FROM (
         NULL AS vendor_id,
         NULL AS product_id,
         NULL AS device_size,
-        NULL AS discard_max_size,
-        NULL AS discard_zeroes_data
+        NULL AS discard_max_size
     FROM images_storage_domain_view
     INNER JOIN storage_for_image_view
         ON images_storage_domain_view.image_guid = storage_for_image_view.image_id
@@ -602,8 +599,7 @@ FROM (
         l.vendor_id,
         l.product_id,
         l.device_size,
-        l.discard_max_size,
-        l.discard_zeroes_data
+        l.discard_max_size
     FROM disk_lun_map dlm
     INNER JOIN luns l
         ON l.lun_id = dlm.lun_id
@@ -663,8 +659,7 @@ GROUP BY storage_domain_id;
 
 CREATE OR REPLACE VIEW vg_discard_support_view AS
 SELECT volume_group_id,
-    BOOL_AND(COALESCE(luns.discard_max_size, 0) > 0) AS supports_discard,
-    BOOL_AND(COALESCE(luns.discard_zeroes_data, FALSE)) AS supports_discard_zeroes_data
+    BOOL_AND(COALESCE(luns.discard_max_size, 0) > 0) AS supports_discard
 FROM luns
 WHERE volume_group_id <> ''
 GROUP BY volume_group_id;
@@ -714,7 +709,6 @@ SELECT storage_domain_static.id AS id,
     storage_domain_static.critical_space_action_blocker AS critical_space_action_blocker,
     storage_domain_dynamic.external_status AS external_status,
     vg_discard_support_view.supports_discard AS supports_discard,
-    vg_discard_support_view.supports_discard_zeroes_data AS supports_discard_zeroes_data,
     EXISTS (
         SELECT 1
         FROM hosted_engine_storage_domains_ids_view
@@ -768,7 +762,6 @@ SELECT DISTINCT storage_domain_static.id AS id,
     storage_domain_static.critical_space_action_blocker AS critical_space_action_blocker,
     storage_domain_dynamic.external_status AS external_status,
     vg_discard_support_view.supports_discard AS supports_discard,
-    vg_discard_support_view.supports_discard_zeroes_data AS supports_discard_zeroes_data,
     EXISTS (
         SELECT 1
         FROM hosted_engine_storage_domains_ids_view
@@ -825,7 +818,6 @@ SELECT storage_domain_static.id AS id,
     storage_domain_static.critical_space_action_blocker AS critical_space_action_blocker,
     storage_domain_dynamic.external_status AS external_status,
     vg_discard_support_view.supports_discard AS supports_discard,
-    vg_discard_support_view.supports_discard_zeroes_data AS supports_discard_zeroes_data,
     EXISTS (
         SELECT 1
         FROM hosted_engine_storage_domains_ids_view
@@ -2667,6 +2659,7 @@ SELECT network.id AS id,
     network.storage_pool_id AS storage_pool_id,
     network.provider_network_provider_id AS provider_network_provider_id,
     network.provider_network_external_id AS provider_network_external_id,
+    network.provider_physical_network_id AS provider_physical_network_id,
     network.qos_id AS qos_id,
     network.dns_resolver_configuration_id,
     network.label AS label,
@@ -3811,3 +3804,24 @@ CREATE OR REPLACE VIEW disk_vm_element_extended AS
     JOIN vm_device vd
         ON dve.disk_id = vd.device_id
             AND dve.vm_id = vd.vm_id;
+
+
+
+CREATE OR REPLACE VIEW iso_disks_as_repo_images AS
+   SELECT sds.id AS repo_domain_id,
+       bd.disk_id::VARCHAR(256) AS repo_image_id,
+       img.size AS size,
+       img.creation_date AS date_created,
+       (EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)*1000)::BIGINT AS last_refreshed,
+       1 AS file_type,
+       bd.disk_alias::VARCHAR(256) AS repo_image_name,
+       spim.storage_pool_id,
+       spim.status
+   FROM base_disks bd
+   JOIN images img ON bd.disk_id = img.image_group_id
+   JOIN image_storage_domain_map isdm ON isdm.image_id = img.image_guid
+   JOIN storage_domain_static sds ON sds.id = isdm.storage_domain_id
+   JOIN storage_pool_iso_map spim ON spim.storage_id = sds.id
+
+   WHERE bd.disk_content_type=4;
+

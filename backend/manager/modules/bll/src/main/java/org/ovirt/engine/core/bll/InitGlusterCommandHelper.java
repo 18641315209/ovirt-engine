@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -14,6 +15,7 @@ import org.ovirt.engine.core.bll.utils.GlusterEventFactory;
 import org.ovirt.engine.core.bll.utils.GlusterUtil;
 import org.ovirt.engine.core.common.AuditLogType;
 import org.ovirt.engine.core.common.action.ActionType;
+import org.ovirt.engine.core.common.action.VdsActionParameters;
 import org.ovirt.engine.core.common.action.gluster.SyncGlusterStorageDevicesParameter;
 import org.ovirt.engine.core.common.businessentities.NonOperationalReason;
 import org.ovirt.engine.core.common.businessentities.VDS;
@@ -91,6 +93,10 @@ public class InitGlusterCommandHelper {
         refreshGlusterStorageDevices(vds);
         boolean ret = initGlusterPeerProcess(vds);
         glusterServerDao.updatePeerStatus(vds.getId(), ret ? PeerStatus.CONNECTED : PeerStatus.DISCONNECTED);
+        //add webhook on cluster if eventing is supported
+        if (ret) {
+            addGlusterWebhook(vds);
+        }
         return ret;
     }
 
@@ -100,6 +106,16 @@ public class InitGlusterCommandHelper {
                     new SyncGlusterStorageDevicesParameter(vds.getId(), true));
         } catch (EngineException e) {
             log.error("Could not refresh storage devices from gluster host '{}'", vds.getName());
+        }
+    }
+
+    private void addGlusterWebhook(VDS vds) {
+        try {
+            backend.runInternalAction(ActionType.AddGlusterWebhookInternal,
+                    new VdsActionParameters(vds.getId()));
+        } catch (RuntimeException e) {
+            log.error("Could not add gluster webhook for gluster host '{}'", vds.getName());
+            log.debug("Exception", e);
         }
     }
 
@@ -119,20 +135,17 @@ public class InitGlusterCommandHelper {
             Map<String, String> customLogValues = new HashMap<>();
             List<VDS> vdsList = vdsDao.getAllForClusterWithStatus(vds.getClusterId(), VDSStatus.Up);
             // If the cluster already having Gluster servers, get an up server
-            if (vdsList != null && vdsList.size() > 0) {
-                VDS upServer = null;
-                for (VDS existingVds : vdsList) {
-                    if (!vds.getId().equals(existingVds.getId())) {
-                        upServer = existingVds;
-                        break;
-                    }
-                }
+            if (!vdsList.isEmpty()) {
 
                 // If new server is not part of the existing gluster peers, add into peer group
-                if (upServer != null) {
+                Optional<VDS> potentialUpServer =
+                        vdsList.stream().filter(existingVds -> !vds.getId().equals(existingVds.getId())).findFirst();
+
+                if (potentialUpServer.isPresent()) {
+                    VDS upServer = potentialUpServer.get();
                     List<GlusterServerInfo> glusterServers = getGlusterPeers(upServer);
                     customLogValues.put("Server", upServer.getHostName());
-                    if (glusterServers.size() == 0) {
+                    if (glusterServers.isEmpty()) {
                         customLogValues.put("Command", "gluster peer status");
                         setNonOperational(vds, NonOperationalReason.GLUSTER_COMMAND_FAILED, customLogValues);
                         return false;
@@ -199,14 +212,10 @@ public class InitGlusterCommandHelper {
 
     private VDS getNewUpServer(VDS vds, VDS upServer) {
         List<VDS> vdsList = vdsDao.getAllForClusterWithStatus(vds.getClusterId(), VDSStatus.Up);
-        VDS newUpServer = null;
-        for (VDS existingVds : vdsList) {
-            if (!vds.getId().equals(existingVds.getId()) && !upServer.getId().equals(existingVds.getId())) {
-                newUpServer = vds;
-                break;
-            }
-        }
-        return newUpServer;
+        return vdsList.stream()
+                .filter(v -> !vds.getId().equals(v.getId()) && !upServer.getId().equals(v.getId()))
+                .findFirst()
+                .orElse(null);
     }
 
 
@@ -258,7 +267,7 @@ public class InitGlusterCommandHelper {
         resourceManager.getEventListener().vdsNonOperational(host.getId(), reason, true, Guid.Empty, customLogValues);
     }
 
-    private int getMaxRetriesGlusterProbeStatus() {
+    private static int getMaxRetriesGlusterProbeStatus() {
         if (MAX_RETRIES_GLUSTER_PROBE_STATUS == null) {
             MAX_RETRIES_GLUSTER_PROBE_STATUS = Config.<Integer> getValue(ConfigValues.GlusterPeerStatusRetries);
         }

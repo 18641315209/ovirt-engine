@@ -7,9 +7,10 @@ import org.ovirt.engine.core.common.businessentities.StorageDomainStatus;
 import org.ovirt.engine.core.common.config.ConfigValues;
 import org.ovirt.engine.ui.common.CommonApplicationConstants;
 import org.ovirt.engine.ui.common.CommonApplicationMessages;
+import org.ovirt.engine.ui.common.CommonApplicationTemplates;
 import org.ovirt.engine.ui.common.gin.AssetProvider;
 import org.ovirt.engine.ui.common.widget.editor.EntityModelCellTable;
-import org.ovirt.engine.ui.common.widget.table.column.AbstractLunAddOrExtendColumn;
+import org.ovirt.engine.ui.common.widget.table.column.AbstractLunActionsColumn;
 import org.ovirt.engine.ui.common.widget.table.column.AbstractLunRemoveColumn;
 import org.ovirt.engine.ui.common.widget.table.column.AbstractLunSelectionColumn;
 import org.ovirt.engine.ui.common.widget.table.column.AbstractLunTextColumn;
@@ -35,6 +36,7 @@ public class SanStorageLunToTargetList extends AbstractSanStorageList<LunModel, 
 
     private static final CommonApplicationConstants constants = AssetProvider.getConstants();
     private static final CommonApplicationMessages messages = AssetProvider.getMessages();
+    private static final CommonApplicationTemplates templates = AssetProvider.getTemplates();
 
     public SanStorageLunToTargetList(SanStorageModelBase model) {
         super(model);
@@ -188,35 +190,35 @@ public class SanStorageLunToTargetList extends AbstractSanStorageList<LunModel, 
             public String getRawValue(LunModel model) {
                 return model.getLunId();
             }
-        }, constants.lunIdSanStorage(), "250px"); //$NON-NLS-1$
+        }, templates.textWithToolTip(constants.lunIdSanStorage()), "250px"); //$NON-NLS-1$
 
         table.addColumn(new AbstractLunTextColumn() {
             @Override
             public String getRawValue(LunModel model) {
                 return messages.gigabytes(String.valueOf(model.getSize()));
             }
-        }, constants.devSizeSanStorage(), "60px"); //$NON-NLS-1$
+        }, templates.textWithToolTip(constants.devSizeSanStorage()), "60px"); //$NON-NLS-1$
 
         table.addColumn(new AbstractLunTextColumn() {
             @Override
             public String getRawValue(LunModel model) {
                 return String.valueOf(model.getMultipathing());
             }
-        }, constants.pathSanStorage(), "45px"); //$NON-NLS-1$
+        }, templates.textWithToolTip(constants.pathSanStorage()), "45px"); //$NON-NLS-1$
 
         table.addColumn(new AbstractLunTextColumn() {
             @Override
             public String getRawValue(LunModel model) {
                 return model.getVendorId();
             }
-        }, constants.vendorIdSanStorage(), "70px"); //$NON-NLS-1$
+        }, templates.textWithToolTip(constants.vendorIdSanStorage()), "70px"); //$NON-NLS-1$
 
         table.addColumn(new AbstractLunTextColumn() {
             @Override
             public String getRawValue(LunModel model) {
                 return model.getProductId();
             }
-        }, constants.productIdSanStorage(), "70px"); //$NON-NLS-1$
+        }, templates.textWithToolTip(constants.productIdSanStorage()), "70px"); //$NON-NLS-1$
 
         table.addColumn(new AbstractLunTextColumn() {
             @Override
@@ -228,7 +230,7 @@ public class SanStorageLunToTargetList extends AbstractSanStorageList<LunModel, 
         if (model.getContainer().isNewStorage() ||
                 model.getContainer().getStorage().getStatus() != StorageDomainStatus.Maintenance) {
             if (multiSelection) {
-                addAbstractLunAddOrExtendColumn(table,
+                addAbstractLunActionsColumn(table,
                         model.getContainer().isNewStorage() ? constants.addSanStorage() : constants.actionsSanStorage());
             }
         } else {
@@ -243,7 +245,7 @@ public class SanStorageLunToTargetList extends AbstractSanStorageList<LunModel, 
                         return object;
                     }
                 };
-                table.addColumn(removeColumn, constants.removeSanStorage(), "95px"); //$NON-NLS-1$
+                table.addColumn(removeColumn, templates.textWithToolTip(constants.removeSanStorage()), "95px"); //$NON-NLS-1$
                 model.getRequireTableRefresh().getEntityChangedEvent().addListener((ev, sender, args) -> {
                     table.redraw();
                 });
@@ -251,13 +253,13 @@ public class SanStorageLunToTargetList extends AbstractSanStorageList<LunModel, 
         }
     }
 
-    private void addAbstractLunAddOrExtendColumn(EntityModelCellTable<ListModel<LunModel>> table, String headerString) {
-        table.addColumn(new AbstractLunAddOrExtendColumn() {
+    private void addAbstractLunActionsColumn(EntityModelCellTable<ListModel<LunModel>> table, String headerString) {
+        table.addColumn(new AbstractLunActionsColumn() {
             @Override
             public LunModel getValue(LunModel object) {
                 return object;
             }
-        }, headerString, "85px"); //$NON-NLS-1$
+        }, templates.textWithToolTip(headerString), "85px"); //$NON-NLS-1$
     }
 
     @SuppressWarnings("unchecked")
@@ -269,13 +271,14 @@ public class SanStorageLunToTargetList extends AbstractSanStorageList<LunModel, 
 
         EntityModelCellTable<ListModel<LunModel>> table =
                 new EntityModelCellTable<>(false, (Resources) GWT.create(SanStorageListTargetTableResources.class), true);
+        table.enableColumnResizing();
 
         table.addColumn(new TextColumn<SanTargetModel>() {
             @Override
             public String getValue(SanTargetModel model) {
                 return model.getName();
             }
-        }, constants.targetNameSanStorage());
+        }, constants.targetNameSanStorage(), "500px"); //$NON-NLS-1$
 
         table.addColumn(new TextColumn<SanTargetModel>() {
             @Override

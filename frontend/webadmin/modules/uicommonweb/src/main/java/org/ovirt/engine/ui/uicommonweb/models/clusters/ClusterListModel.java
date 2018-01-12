@@ -41,6 +41,7 @@ import org.ovirt.engine.ui.uicommonweb.models.ConfirmationModel;
 import org.ovirt.engine.ui.uicommonweb.models.EntityModel;
 import org.ovirt.engine.ui.uicommonweb.models.HasEntity;
 import org.ovirt.engine.ui.uicommonweb.models.ListWithSimpleDetailsModel;
+import org.ovirt.engine.ui.uicommonweb.models.SearchStringMapping;
 import org.ovirt.engine.ui.uicommonweb.models.configure.PermissionListModel;
 import org.ovirt.engine.ui.uicommonweb.models.configure.labels.list.ClusterAffinityLabelListModel;
 import org.ovirt.engine.ui.uicommonweb.models.configure.scheduling.affinity_groups.list.ClusterAffinityGroupListModel;
@@ -232,7 +233,7 @@ public class ClusterListModel<E> extends ListWithSimpleDetailsModel<E, Cluster> 
         setApplicationPlace(WebAdminApplicationPlaces.clusterMainPlace);
         setHashName("clusters"); //$NON-NLS-1$
 
-        setDefaultSearchString("Cluster:"); //$NON-NLS-1$
+        setDefaultSearchString(SearchStringMapping.CLUSTER_DEFAULT_SEARCH + ":"); //$NON-NLS-1$
         setSearchString(getDefaultSearchString());
         setSearchObjects(new String[] { SearchObjects.VDC_CLUSTER_OBJ_NAME, SearchObjects.VDC_CLUSTER_PLU_OBJ_NAME });
 
@@ -546,8 +547,10 @@ public class ClusterListModel<E> extends ListWithSimpleDetailsModel<E, Cluster> 
 
         Frontend.getInstance().runMultipleAction(ActionType.RemoveCluster, prms,
                 result -> {
-
                     ConfirmationModel localModel = (ConfirmationModel) result.getState();
+                    if (result.getReturnValue().stream().anyMatch(rv -> !rv.isValid())) {
+                        restorePreviousSelectedItem();
+                    }
                     localModel.stopProgress();
                     cancel();
                 }, model);
@@ -556,14 +559,7 @@ public class ClusterListModel<E> extends ListWithSimpleDetailsModel<E, Cluster> 
     public void onSave() {
         ClusterModel model = (ClusterModel) getWindow();
 
-        boolean validateCpu =
-                (model.getIsNew() && model.getEnableOvirtService().getEntity())
-                        || (model.getIsEdit() && getSelectedItem().getCpuName() != null);
-
-        if (!model.validate(validateCpu)) {
-            return;
-        }
-        else if (model.getIsNew()) {
+        if (model.getIsNew()) {
             onPreSaveInternal(model);
         }
         else {

@@ -81,7 +81,10 @@ public class OvfOvaReader extends OvfReader {
     }
 
     protected void readOsSection(XmlNode section) {
-        int osId = mapOsId(section.attributes.get("ovf:id").getValue());
+        XmlAttribute ovirtOsId = section.attributes.get("ovirt:id");
+        int osId = ovirtOsId != null ?
+                Integer.parseInt(ovirtOsId.getValue())
+                : mapOsId(section.attributes.get("ovf:id").getValue());
         vm.setVmOs(osId);
         setClusterArch(osRepository.getArchitectureFromOS(osId));
     }

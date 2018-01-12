@@ -27,7 +27,6 @@ import org.ovirt.engine.core.dal.dbbroker.auditloghandling.AuditLogableImpl;
 import org.ovirt.engine.core.dao.DiskDao;
 import org.ovirt.engine.core.dao.DiskImageDao;
 import org.ovirt.engine.core.dao.DiskVmElementDao;
-import org.ovirt.engine.core.dao.StorageDomainDao;
 
 @Singleton
 public class BlockStorageDiscardFunctionalityHelper {
@@ -40,9 +39,6 @@ public class BlockStorageDiscardFunctionalityHelper {
 
     @Inject
     private DiskVmElementDao diskVmElementDao;
-
-    @Inject
-    private StorageDomainDao storageDomainDao;
 
     @Inject
     private AuditLogDirector auditLogDirector;
@@ -94,19 +90,6 @@ public class BlockStorageDiscardFunctionalityHelper {
                 return false;
             }
         }
-        boolean sdDiscardZeroesData = Boolean.TRUE.equals(storageDomain.getSupportsDiscardZeroesData());
-        if (sdDiscardZeroesData && !allLunsHaveDiscardZeroesTheDataSupport(lunsToAdd)) {
-            // The sd supports the property that discard zeroes the data and
-            // there is at least one lun that breaks this property.
-            if (diskVmElements == null) {
-                diskVmElements = diskVmElementDao.getAllDiskVmElementsByDisksIds(sdDisksIds);
-            }
-            if (vmDiskWithPassDiscardAndWadExists(sdDisks, diskVmElements)) {
-                // There is at least one disk that requires the storage domain's support for the
-                // property that discard zeroes the data and at least one lun that breaks this property.
-                return false;
-            }
-        }
         return true;
     }
 
@@ -125,15 +108,16 @@ public class BlockStorageDiscardFunctionalityHelper {
         return true;
     }
 
-    public void logIfLunsBreakStorageDomainDiscardFunctionality(Collection<LUNs> luns, Guid storageDomainId) {
-        Collection<LUNs> lunsThatBreakPassDiscardSupport = getLunsThatBreakPassDiscardSupport(luns, storageDomainId);
+    public void logIfLunsBreakStorageDomainDiscardFunctionality(Collection<LUNs> luns, StorageDomain storageDomain) {
+        Collection<LUNs> lunsThatBreakPassDiscardSupport = getLunsThatBreakPassDiscardSupport(luns,
+                storageDomain.getId());
         if (!lunsThatBreakPassDiscardSupport.isEmpty()) {
-            logLunsBrokeStorageDomainPassDiscardSupport(lunsThatBreakPassDiscardSupport, storageDomainId);
+            logLunsBrokeStorageDomainPassDiscardSupport(lunsThatBreakPassDiscardSupport, storageDomain);
         }
         Collection<LUNs> lunsThatBreakDiscardAfterDeleteSupport =
-                getLunsThatBreakDiscardAfterDeleteSupport(luns, storageDomainId);
+                getLunsThatBreakDiscardAfterDeleteSupport(luns, storageDomain);
         if (!lunsThatBreakDiscardAfterDeleteSupport.isEmpty()) {
-            logLunsBrokeStorageDomainDiscardAfterDeleteSupport(lunsThatBreakDiscardAfterDeleteSupport, storageDomainId);
+            logLunsBrokeStorageDomainDiscardAfterDeleteSupport(lunsThatBreakDiscardAfterDeleteSupport, storageDomain);
         }
     }
 
@@ -160,43 +144,25 @@ public class BlockStorageDiscardFunctionalityHelper {
         return luns.stream().allMatch(LUNs::supportsDiscard);
     }
 
-    protected boolean allLunsHaveDiscardZeroesTheDataSupport(Collection<LUNs> luns) {
-        return luns.stream().allMatch(LUNs::hasDiscardZeroesTheDataSupport);
-    }
-
     protected boolean vmDiskWithPassDiscardExists(Collection<DiskVmElement> diskVmElements) {
         return diskVmElements.stream().anyMatch(DiskVmElement::isPassDiscard);
-    }
-
-    protected boolean vmDiskWithPassDiscardAndWadExists(Collection<DiskImage> storageDomainDisks,
-            Collection<DiskVmElement> storageDomainVmDisks) {
-        Map<Guid, List<DiskVmElement>> diskVmElementsMap = storageDomainVmDisks.stream()
-                .collect(Collectors.groupingBy(DiskVmElement::getDiskId));
-        return storageDomainDisks.stream().anyMatch(sdDisk -> sdDisk.isWipeAfterDelete() &&
-                diskVmElementsMap.containsKey(sdDisk.getId()) &&
-                diskVmElementsMap.get(sdDisk.getId()).stream().anyMatch(DiskVmElement::isPassDiscard));
     }
 
     protected Collection<LUNs> getLunsThatBreakPassDiscardSupport(Collection<LUNs> luns, Guid storageDomainId) {
         Collection<DiskImage> sdDisks = diskImageDao.getAllForStorageDomain(storageDomainId);
         Collection<Guid> sdDisksIds = sdDisks.stream().map(Disk::getId).collect(Collectors.toList());
         Collection<DiskVmElement> diskVmElements = diskVmElementDao.getAllDiskVmElementsByDisksIds(sdDisksIds);
-        boolean sdContainsVmDiskWithPassDiscard = vmDiskWithPassDiscardExists(diskVmElements);
-
-        if (sdContainsVmDiskWithPassDiscard) {
-            boolean sdContainsVmDiskWithPassDiscardAndWad =
-                    vmDiskWithPassDiscardAndWadExists(sdDisks, diskVmElements);
-
+        if (vmDiskWithPassDiscardExists(diskVmElements)) {
+            // The storage domain contains at least one disk with pass discard enabled.
             return luns.stream()
-                    .filter(lun -> !lun.supportsDiscard() ||
-                            (sdContainsVmDiskWithPassDiscardAndWad && !lun.hasDiscardZeroesTheDataSupport()))
+                    .filter(lun -> !lun.supportsDiscard())
                     .collect(Collectors.toList());
         }
         return Collections.emptyList();
     }
 
-    protected Collection<LUNs> getLunsThatBreakDiscardAfterDeleteSupport(Collection<LUNs> luns, Guid storageDomainId) {
-        StorageDomain storageDomain = storageDomainDao.get(storageDomainId);
+    protected Collection<LUNs> getLunsThatBreakDiscardAfterDeleteSupport(Collection<LUNs> luns,
+            StorageDomain storageDomain) {
         if (storageDomain.getDiscardAfterDelete()) {
             return luns.stream()
                     .filter(lun -> !lun.supportsDiscard())
@@ -206,18 +172,20 @@ public class BlockStorageDiscardFunctionalityHelper {
     }
 
     private void logLunsBrokeStorageDomainPassDiscardSupport(Collection<LUNs> lunsThatBreakSdPassDiscardSupport,
-            Guid storageDomainId) {
+            StorageDomain storageDomain) {
         AuditLogable auditLog = new AuditLogableImpl();
-        auditLog.setStorageDomainId(storageDomainId);
+        auditLog.setStorageDomainId(storageDomain.getId());
+        auditLog.setStorageDomainName(storageDomain.getName());
         auditLog.addCustomValue("LunsIds",
                 lunsThatBreakSdPassDiscardSupport.stream().map(LUNs::getLUNId).collect(Collectors.joining(", ")));
         auditLogDirector.log(auditLog, AuditLogType.LUNS_BROKE_SD_PASS_DISCARD_SUPPORT);
     }
 
     private void logLunsBrokeStorageDomainDiscardAfterDeleteSupport(
-            Collection<LUNs> lunsThatBreakSdDiscardAfterDeleteSupport, Guid storageDomainId) {
+            Collection<LUNs> lunsThatBreakSdDiscardAfterDeleteSupport, StorageDomain storageDomain) {
         AuditLogable auditLog = new AuditLogableImpl();
-        auditLog.setStorageDomainId(storageDomainId);
+        auditLog.setStorageDomainId(storageDomain.getId());
+        auditLog.setStorageDomainName(storageDomain.getName());
         auditLog.addCustomValue("LunsIds", lunsThatBreakSdDiscardAfterDeleteSupport.stream()
                 .map(LUNs::getLUNId).collect(Collectors.joining(", ")));
         auditLogDirector.log(auditLog, AuditLogType.LUNS_BROKE_SD_DISCARD_AFTER_DELETE_SUPPORT);

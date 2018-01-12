@@ -34,6 +34,7 @@ import org.ovirt.engine.core.common.utils.ansible.AnsibleCommandBuilder;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleConstants;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleExecutor;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleReturnCode;
+import org.ovirt.engine.core.common.utils.ansible.AnsibleReturnValue;
 import org.ovirt.engine.core.compat.Guid;
 import org.ovirt.engine.core.dal.dbbroker.auditloghandling.AuditLogable;
 import org.ovirt.engine.core.dal.dbbroker.auditloghandling.AuditLogableImpl;
@@ -239,6 +240,7 @@ public class InstallVdsInternalCommand<T extends InstallVdsParameters> extends V
             .hostnames(getVds().getHostName())
             .variables(
                 new Pair<>("host_deploy_cluster_version", hostCluster.getCompatibilityVersion()),
+                new Pair<>("host_deploy_cluster_name", hostCluster.getName()),
                 new Pair<>("host_deploy_gluster_enabled", hostCluster.supportsGlusterService()),
                 new Pair<>("host_deploy_virt_enabled", hostCluster.supportsVirtService()),
                 new Pair<>("host_deploy_vdsm_port", getVds().getPort()),
@@ -262,7 +264,8 @@ public class InstallVdsInternalCommand<T extends InstallVdsParameters> extends V
         logable.setCorrelationId(getCorrelationId());
         auditLogDirector.log(logable, AuditLogType.VDS_ANSIBLE_INSTALL_STARTED);
 
-        if (ansibleExecutor.runCommand(command).getAnsibleReturnCode() != AnsibleReturnCode.OK) {
+        AnsibleReturnValue ansibleReturnValue = ansibleExecutor.runCommand(command);
+        if (ansibleReturnValue.getAnsibleReturnCode() != AnsibleReturnCode.OK) {
             throw new VdsInstallException(
                 VDSStatus.InstallFailed,
                 String.format(

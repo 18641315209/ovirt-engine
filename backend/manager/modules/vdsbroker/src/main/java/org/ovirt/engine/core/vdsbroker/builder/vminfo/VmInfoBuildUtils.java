@@ -1,6 +1,6 @@
 package org.ovirt.engine.core.vdsbroker.builder.vminfo;
 
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -18,13 +18,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
-import org.apache.commons.codec.CharEncoding;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.MapUtils;
@@ -70,6 +70,7 @@ import org.ovirt.engine.core.common.businessentities.storage.VolumeFormat;
 import org.ovirt.engine.core.common.config.Config;
 import org.ovirt.engine.core.common.config.ConfigValues;
 import org.ovirt.engine.core.common.osinfo.OsRepository;
+import org.ovirt.engine.core.common.utils.ValidationUtils;
 import org.ovirt.engine.core.common.utils.VmDeviceCommonUtils;
 import org.ovirt.engine.core.common.utils.VmDeviceType;
 import org.ovirt.engine.core.compat.Guid;
@@ -126,6 +127,12 @@ public class VmInfoBuildUtils {
     private final StorageDomainStaticDao storageDomainStaticDao;
     private final StorageServerConnectionDao storageServerConnectionDao;
 
+    private static final String BLOCK_DOMAIN_DISK_PATH = "/rhev/data-center/mnt/blockSD/%s/images/%s/%s";
+    private static final String FILE_DOMAIN_DISK_PATH = "/rhev/data-center/%s/%s/images/%s/%s";
+
+    private static final Pattern BLOCK_DOMAIN_MATCHER =
+            Pattern.compile(String.format(BLOCK_DOMAIN_DISK_PATH, ValidationUtils.GUID,
+                    ValidationUtils.GUID, ValidationUtils.GUID));
 
     @Inject
     VmInfoBuildUtils(
@@ -811,7 +818,7 @@ public class VmInfoBuildUtils {
         vmPayload.setDeviceType(VmDeviceType.FLOPPY);
         vmPayload.getFiles().put(
                 osRepository.getSysprepFileName(vm.getOs(), vm.getCompatibilityVersion()),
-                new String(BASE_64.encode(sysPrepContent.getBytes()), Charset.forName(CharEncoding.UTF_8)));
+                new String(BASE_64.encode(sysPrepContent.getBytes()), StandardCharsets.UTF_8));
 
         return new VmDevice(new VmDeviceId(Guid.newGuid(), vm.getId()),
                 VmDeviceGeneralType.DISK,
@@ -833,7 +840,7 @@ public class VmInfoBuildUtils {
         vmPayload.setVolumeId(CLOUD_INIT_VOL_ID);
         for (Entry<String, byte[]> entry : cloudInitContent.entrySet()) {
             vmPayload.getFiles().put(entry.getKey(),
-                    new String(BASE_64.encode(entry.getValue()), Charset.forName(CharEncoding.UTF_8)));
+                    new String(BASE_64.encode(entry.getValue()), StandardCharsets.UTF_8));
         }
 
         return new VmDevice(new VmDeviceId(Guid.newGuid(), vm.getId()),
@@ -932,7 +939,13 @@ public class VmInfoBuildUtils {
         StorageDomainStatic dom = this.storageDomainStaticDao.get(((DiskImage) disk).getStorageIds().get(0));
         StorageServerConnections con = this.storageServerConnectionDao.getAllForDomain(dom.getId()).get(0);
         String path = con.getConnection(); // host:/volume
-        return path.split(":/");
+        String[] volInfo = path.split(":");
+        if (volInfo.length != 2) {
+            log.error("Invalid volInfo value: {}", path);
+            return null;
+        }
+        volInfo[1] = volInfo[1].replaceFirst("^/", "");
+        return volInfo;
     }
 
     private String findCpusToPinIoAndEmulator(VM vm, Map<String, Object> cpuPinning, MemoizingSupplier<List<VdsNumaNode>> hostNumaNodesSupplier, int vdsCpuThreads) {
@@ -1054,5 +1067,24 @@ public class VmInfoBuildUtils {
     private static VdsNumaNode getNumaNodeWithLowerCpuIds(VdsNumaNode mostPinnedPnumaNode, VdsNumaNode currNode) {
         return Objects.compare(currNode.getCpuIds(), mostPinnedPnumaNode.getCpuIds(), Comparator.comparing(Collections::min)) < 0 ?
                 currNode: mostPinnedPnumaNode;
+    }
+
+
+    public String getPathToImage(DiskImage diskImage) {
+        if (diskImage.getStorageTypes().get(0).isBlockDomain()) {
+            return String.format(BLOCK_DOMAIN_DISK_PATH,
+                    diskImage.getStorageIds().get(0),
+                    diskImage.getId(),
+                    diskImage.getImageId());
+        }
+        return String.format(FILE_DOMAIN_DISK_PATH,
+                diskImage.getStoragePoolId(),
+                diskImage.getStorageIds().get(0),
+                diskImage.getId(),
+                diskImage.getImageId());
+    }
+
+    public boolean isBlockDomainPath(String path) {
+        return BLOCK_DOMAIN_MATCHER.matcher(path).matches();
     }
 }

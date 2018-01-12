@@ -57,6 +57,14 @@ public class IscsiStorageView extends AbstractStorageView<IscsiStorageModel> imp
     @Ignore
     IscsiLunToTargetView iscsiLunToTargetView;
 
+    @UiField
+    @Ignore
+    Label mainLabel;
+
+    @UiField
+    @Ignore
+    Label subLabel;
+
     private double treeCollapsedHeight = 206;
     private double treeExpandedHeight = 305;
     private double lunsTreeHeight = 342;
@@ -102,8 +110,8 @@ public class IscsiStorageView extends AbstractStorageView<IscsiStorageModel> imp
             if (propName.equals("IsValid")) { //$NON-NLS-1$
                 onIsValidPropertyChange(object);
             }
-            else if (propName.equals("IsGrouppedByTarget")) { //$NON-NLS-1$
-                updateListByGropping(object);
+            else if (propName.equals("IsGroupedByTarget")) { //$NON-NLS-1$
+                updateListByGrouping(object);
             }
         });
 
@@ -114,17 +122,31 @@ public class IscsiStorageView extends AbstractStorageView<IscsiStorageModel> imp
         // Add click handlers
         targetsToLunTab.addClickHandler(event -> {
             iscsiLunToTargetView.disableItemsUpdate();
-            object.setIsGrouppedByTarget(true);
+            object.setIsGroupedByTarget(true);
         });
 
         lunToTargetsTab.addClickHandler(event -> {
             iscsiTargetToLunView.disableItemsUpdate();
-            object.setIsGrouppedByTarget(false);
+            object.setIsGroupedByTarget(false);
         });
 
         // Update selected tab and list
-        dialogTabPanel.switchTab(object.getIsGrouppedByTarget() ? targetsToLunTab : lunToTargetsTab);
-        updateListByGropping(object);
+        dialogTabPanel.switchTab(object.getIsGroupedByTarget() ? targetsToLunTab : lunToTargetsTab);
+        updateListByGrouping(object);
+
+        // Set labels above table
+        if (!object.getContainer().isNewStorage()) {
+            switch (object.getContainer().getStorage().getStatus()) {
+            case Maintenance:
+                mainLabel.setText(constants.storageIscsiRemoveLUNsLabel());
+                subLabel.setText(constants.storageIscsiAvailableActionsOnMaintenanceLabel());
+                break;
+            case Active:
+                mainLabel.setText(constants.storageIscsiActionsLabel());
+                subLabel.setText(constants.storageIscsiAvailableActionsForActiveDomainsLabel());
+                break;
+            }
+        }
     }
 
     void initLists(IscsiStorageModel object) {
@@ -140,9 +162,9 @@ public class IscsiStorageView extends AbstractStorageView<IscsiStorageModel> imp
         targetsToLunsPanel.setWidget(iscsiTargetToLunView);
     }
 
-    void updateListByGropping(IscsiStorageModel object) {
-        // Update view by 'IsGrouppedByTarget' flag
-        if (object.getIsGrouppedByTarget()) {
+    void updateListByGrouping(IscsiStorageModel object) {
+        // Update view by 'IsGroupedByTarget' flag
+        if (object.getIsGroupedByTarget()) {
             iscsiTargetToLunView.activateItemsUpdate();
         }
         else {

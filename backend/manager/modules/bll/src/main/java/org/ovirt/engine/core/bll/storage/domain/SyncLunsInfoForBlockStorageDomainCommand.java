@@ -174,9 +174,7 @@ public class SyncLunsInfoForBlockStorageDomainCommand<T extends SyncLunsInfoForB
                     if (lunFromDbHasSamePvId) {
                         // Existing lun, check if it should be updated.
                         if (lunFromDb.getDeviceSize() != lunFromVgInfo.getDeviceSize() ||
-                                !Objects.equals(lunFromDb.getDiscardMaxSize(), lunFromVgInfo.getDiscardMaxSize()) ||
-                                !Objects.equals(lunFromDb.getDiscardZeroesData(),
-                                        lunFromVgInfo.getDiscardZeroesData())) {
+                                !Objects.equals(lunFromDb.getDiscardMaxSize(), lunFromVgInfo.getDiscardMaxSize())) {
                             return updateLunsHandler;
                         }
                         // Existing lun is up to date.
@@ -216,7 +214,7 @@ public class SyncLunsInfoForBlockStorageDomainCommand<T extends SyncLunsInfoForB
                     .map(Map.Entry::getValue)
                     .flatMap(List::stream)
                     .collect(Collectors.toList());
-            discardHelper.logIfLunsBreakStorageDomainDiscardFunctionality(lunsToUpdateInDb, getStorageDomainId());
+            discardHelper.logIfLunsBreakStorageDomainDiscardFunctionality(lunsToUpdateInDb, getStorageDomain());
         }
     }
 

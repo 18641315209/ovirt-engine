@@ -43,6 +43,7 @@ import org.ovirt.engine.core.common.businessentities.VmWithStatusForExclusiveLoc
 import org.ovirt.engine.core.common.businessentities.storage.Disk;
 import org.ovirt.engine.core.common.businessentities.storage.DiskImage;
 import org.ovirt.engine.core.common.businessentities.storage.DiskStorageType;
+import org.ovirt.engine.core.common.businessentities.storage.RepoImage;
 import org.ovirt.engine.core.common.interfaces.SearchType;
 import org.ovirt.engine.core.common.mode.ApplicationMode;
 import org.ovirt.engine.core.common.queries.IdQueryParameters;
@@ -78,6 +79,7 @@ import org.ovirt.engine.ui.uicommonweb.models.ConsolePopupModel;
 import org.ovirt.engine.ui.uicommonweb.models.ConsolesFactory;
 import org.ovirt.engine.ui.uicommonweb.models.EntityModel;
 import org.ovirt.engine.ui.uicommonweb.models.HasEntity;
+import org.ovirt.engine.ui.uicommonweb.models.SearchStringMapping;
 import org.ovirt.engine.ui.uicommonweb.models.VmConsoles;
 import org.ovirt.engine.ui.uicommonweb.models.VmErrataCountModel;
 import org.ovirt.engine.ui.uicommonweb.models.configure.ChangeCDModel;
@@ -512,7 +514,7 @@ public class VmListModel<E> extends VmBaseListModel<E, VM>
         setApplicationPlace(WebAdminApplicationPlaces.virtualMachineMainPlace);
         setHashName("virtual_machines"); //$NON-NLS-1$
 
-        setDefaultSearchString("Vms:"); //$NON-NLS-1$
+        setDefaultSearchString(SearchStringMapping.VMS_DEFAULT_SEARCH + ":"); //$NON-NLS-1$
         setSearchString(getDefaultSearchString());
         setSearchObjects(new String[] { SearchObjects.VM_OBJ_NAME, SearchObjects.VM_PLU_OBJ_NAME });
         setAvailableInModes(ApplicationMode.VirtOnly);
@@ -1611,12 +1613,14 @@ public class VmListModel<E> extends VmBaseListModel<E, VM>
             list.add(new RemoveVmParameters(entry.getKey(), false, (Boolean) entry.getValue().getEntity()));
         }
 
-        selectNextItem();
         model.startProgress();
-
+        selectNextItem();
         Frontend.getInstance().runMultipleAction(ActionType.RemoveVm, list,
                 result -> {
                     ConfirmationModel localModel = (ConfirmationModel) result.getState();
+                    if (result.getReturnValue().stream().anyMatch(rv -> !rv.isValid())) {
+                        restorePreviousSelectedItem();
+                    }
                     localModel.stopProgress();
                     cancel();
                 }, model);
@@ -1635,21 +1639,20 @@ public class VmListModel<E> extends VmBaseListModel<E, VM>
         model.setHashName("change_cd"); //$NON-NLS-1$
 
         AttachCdModel attachCdModel = (AttachCdModel) getWindow();
-        ArrayList<String> images1 =
-                new ArrayList<>(Arrays.asList(new String[] { ConstantsManager.getInstance()
-                        .getConstants()
-                        .noCds() }));
+        List<RepoImage> images1 = new ArrayList<>(
+                Arrays.asList(new RepoImage(ConstantsManager.getInstance().getConstants().noCds())));
         attachCdModel.getIsoImage().setItems(images1);
         attachCdModel.getIsoImage().setSelectedItem(Linq.firstOrNull(images1));
 
-        ImagesDataProvider.getIrsImageList(new AsyncQuery<>(images -> {
+        ImagesDataProvider.getISOImagesList(new AsyncQuery<>(images -> {
             AttachCdModel _attachCdModel = (AttachCdModel) getWindow();
-            images.add(0, ConsoleModel.getEjectLabel());
+            RepoImage eject = new RepoImage(ConsoleModel.getEjectLabel());
+            images.add(0, eject);
             _attachCdModel.getIsoImage().setItems(images);
             if (_attachCdModel.getIsoImage().getIsChangable()) {
-                String selectedIso =
-                        Linq.firstOrNull(images, s -> vm.getCurrentCd() != null && vm.getCurrentCd().equals(s));
-                _attachCdModel.getIsoImage().setSelectedItem(selectedIso == null ? ConsoleModel.getEjectLabel() : selectedIso);
+                RepoImage selectedIso =
+                        Linq.firstOrNull(images, s -> vm.getCurrentCd() != null && vm.getCurrentCd().equals(s.getRepoImageId()));
+                _attachCdModel.getIsoImage().setSelectedItem(selectedIso == null ? eject : selectedIso);
             }
         }), vm.getStoragePoolId());
 
@@ -1671,14 +1674,14 @@ public class VmListModel<E> extends VmBaseListModel<E, VM>
             return;
         }
 
-        if (Objects.equals(model.getIsoImage().getSelectedItem(), vm.getCurrentCd())) {
+        if (Objects.equals(model.getIsoImage().getSelectedItem().getRepoImageId(), vm.getCurrentCd())) {
             cancel();
             return;
         }
 
         String isoName =
-                Objects.equals(model.getIsoImage().getSelectedItem(), ConsoleModel.getEjectLabel()) ? "" //$NON-NLS-1$
-                        : model.getIsoImage().getSelectedItem();
+                Objects.equals(model.getIsoImage().getSelectedItem().getRepoImageId(), ConsoleModel.getEjectLabel()) ? "" //$NON-NLS-1$
+                        : model.getIsoImage().getSelectedItem().getRepoImageId();
 
         model.startProgress();
 
@@ -2547,33 +2550,4 @@ public class VmListModel<E> extends VmBaseListModel<E, VM>
         return entity.getStoragePoolId();
     }
 
-    protected void exportOva2() {
-        VM selectedEntity = getSelectedItem();
-        if (selectedEntity == null) {
-            return;
-        }
-
-        if (getWindow() != null) {
-            return;
-        }
-
-//        ExportOvaModel model = (ExportOvaModel) getWindow();
-//        ArrayList<ActionParametersBase> list = new ArrayList<>();
-//        for (Object item : getSelectedItems()) {
-//            VM a = (VM) item;
-//            MoveOrCopyParameters parameters = new MoveOrCopyParameters(a.getId(), storageDomainId);
-//            parameters.setForceOverride(model.getForceOverride().getEntity());
-//            parameters.setCopyCollapse(model.getCollapseSnapshots().getEntity());
-//            parameters.setTemplateMustExists(false);
-//
-//            list.add(parameters);
-//        }
-//
-//        model.startProgress();
-
-        ExportOvaParameters parameters = new ExportOvaParameters();
-        parameters.setEntityType(VmEntityType.VM);
-        parameters.setEntityId(selectedEntity.getId());
-        Frontend.getInstance().runAction(ActionType.ExportOva, parameters);
-    }
 }

@@ -712,6 +712,9 @@ public enum ConfigValues {
     @TypeConverterAttribute(Boolean.class)
     GetImageTicketSupported,
 
+    @TypeConverterAttribute(Boolean.class)
+    TestImageIOProxyConnectionSupported,
+
     @Reloadable
     @TypeConverterAttribute(Long.class)
     SetupNetworksPollingTimeout,
@@ -1541,6 +1544,10 @@ public enum ConfigValues {
 
     @TypeConverterAttribute(Boolean.class)
     ContentType,
+
+    @TypeConverterAttribute(Boolean.class)
+    IsoOnDataDomain,
+
     /**
      * Determines if the resume behavior can be configured in this compatibility level.
      *
@@ -1552,6 +1559,12 @@ public enum ConfigValues {
 
     @TypeConverterAttribute(Boolean.class)
     DefaultRouteReportedByVdsm(),
+
+    @TypeConverterAttribute(Boolean.class)
+    GlusterEventingSupported,
+
+    @TypeConverterAttribute(Boolean.class)
+    LldpInformationSupported,
 
     Invalid;
 

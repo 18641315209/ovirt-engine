@@ -13,13 +13,11 @@ import org.ovirt.engine.core.common.AuditLogType;
 import org.ovirt.engine.core.common.HostUpgradeManagerResult;
 import org.ovirt.engine.core.common.businessentities.VDS;
 import org.ovirt.engine.core.common.businessentities.VDSType;
-import org.ovirt.engine.core.common.utils.Pair;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleCommandBuilder;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleConstants;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleExecutor;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleReturnCode;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleReturnValue;
-import org.ovirt.engine.core.common.utils.ansible.AnsibleVerbosity;
 import org.ovirt.engine.core.dal.dbbroker.auditloghandling.AuditLogDirector;
 import org.ovirt.engine.core.dal.dbbroker.auditloghandling.AuditLogable;
 import org.ovirt.engine.core.dal.dbbroker.auditloghandling.AuditLogableImpl;
@@ -48,12 +46,10 @@ public class HostUpgradeManager implements UpdateAvailable, Updateable {
                 .hostnames(host.getHostName())
                 .checkMode(true)
                 .enableLogging(false)
+                .stdoutCallback(AnsibleConstants.HOST_UPGRADE_CALLBACK_PLUGIN)
                 .playbook(AnsibleConstants.HOST_UPGRADE_PLAYBOOK);
 
-            AnsibleReturnValue ansibleReturnValue = ansibleExecutor.runCommand(
-                command,
-                new Pair<>("ANSIBLE_STDOUT_CALLBACK", AnsibleConstants.HOST_UPGRADE_CALLBACK_PLUGIN)
-            );
+            AnsibleReturnValue ansibleReturnValue = ansibleExecutor.runCommand(command);
             if (ansibleReturnValue.getAnsibleReturnCode() != AnsibleReturnCode.OK) {
                 String error = String.format("Failed to run check-update of host '%1$s'.", host.getHostName());
                 log.error(error);
@@ -106,7 +102,6 @@ public class HostUpgradeManager implements UpdateAvailable, Updateable {
         try {
             AnsibleCommandBuilder command = new AnsibleCommandBuilder()
                 .hostnames(host.getHostName())
-                .verboseLevel(AnsibleVerbosity.LEVEL1)
                 // /var/log/ovirt-engine/host-deploy/ovirt-host-mgmt-ansible-{hostname}-{correlationid}-{timestamp}.log
                 .logFileDirectory(VdsDeployBase.HOST_DEPLOY_LOG_DIRECTORY)
                 .logFilePrefix("ovirt-host-mgmt-ansible")

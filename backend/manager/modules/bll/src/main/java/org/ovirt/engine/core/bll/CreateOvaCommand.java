@@ -6,6 +6,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
@@ -13,11 +14,14 @@ import org.ovirt.engine.core.bll.context.CommandContext;
 import org.ovirt.engine.core.bll.storage.disk.image.ImagesHandler;
 import org.ovirt.engine.core.bll.storage.utils.VdsCommandsHelper;
 import org.ovirt.engine.core.bll.utils.PermissionSubject;
+import org.ovirt.engine.core.bll.utils.VmDeviceUtils;
 import org.ovirt.engine.core.common.action.CreateOvaParameters;
 import org.ovirt.engine.core.common.businessentities.VM;
+import org.ovirt.engine.core.common.businessentities.VmDevice;
 import org.ovirt.engine.core.common.businessentities.storage.DiskImage;
 import org.ovirt.engine.core.common.businessentities.storage.FullEntityOvfData;
 import org.ovirt.engine.core.common.utils.Pair;
+import org.ovirt.engine.core.common.utils.VmDeviceCommonUtils;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleCommandBuilder;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleConstants;
 import org.ovirt.engine.core.common.utils.ansible.AnsibleExecutor;
@@ -45,9 +49,11 @@ public class CreateOvaCommand<T extends CreateOvaParameters> extends CommandBase
     @Inject
     private VmHandler vmHandler;
     @Inject
+    private VmDeviceUtils vmDeviceUtils;
+    @Inject
     private ImagesHandler imagesHandler;
 
-    public static final String CREATE_OVA_LOG_DIRECTORY = "create-ova";
+    public static final String CREATE_OVA_LOG_DIRECTORY = "ova";
 
     public CreateOvaCommand(T parameters, CommandContext cmdContext) {
         super(parameters, cmdContext);
@@ -61,33 +67,71 @@ public class CreateOvaCommand<T extends CreateOvaParameters> extends CommandBase
 
     @Override
     protected void executeCommand() {
-        Collection<DiskImage> disks = getParameters().getDisks();
+        Map<DiskImage, DiskImage> diskMappings = getParameters().getDiskInfoDestinationMap();
+        Collection<DiskImage> disks = diskMappings.values();
         Map<Guid, String> diskIdToPath = prepareImages(disks);
         fillDiskApparentSize(disks);
         VM vm = getParameters().getVm();
         vmHandler.updateNetworkInterfacesFromDb(vm);
+        vmHandler.updateVmInitFromDB(vm.getStaticData(), true);
+        vmDeviceUtils.setVmDevices(vm.getStaticData());
+        fixDiskDevices(vm, diskMappings);
         FullEntityOvfData fullEntityOvfData = new FullEntityOvfData(vm);
         fullEntityOvfData.setDiskImages(new ArrayList<>(disks));
         fullEntityOvfData.setInterfaces(vm.getInterfaces());
         String ovf = ovfManager.exportOva(vm, fullEntityOvfData, vm.getCompatibilityVersion());
         log.debug("Exporting OVF: {}", ovf);
         boolean succeeded = runAnsiblePackOvaPlaybook(vm.getName(), ovf, disks, diskIdToPath);
+        teardownImages(disks);
         setSucceeded(succeeded);
     }
 
+    private void fixDiskDevices(VM vm, Map<DiskImage, DiskImage> diskMappings) {
+        Map<Guid, Guid> diskIdMappings = new HashMap<>();
+        diskMappings.forEach((source, destination) -> diskIdMappings.put(source.getId(), destination.getId()));
+
+        List<VmDevice> diskDevices = vm.getStaticData().getManagedDeviceMap().values().stream()
+                .filter(VmDeviceCommonUtils::isDisk)
+                .collect(Collectors.toList());
+        diskDevices.forEach(diskDevice -> {
+            Guid sourceDiskId = diskDevice.getDeviceId();
+            Guid destinationDiskId = diskIdMappings.get(sourceDiskId);
+            if (destinationDiskId != null) {
+                vm.getStaticData().getManagedDeviceMap().remove(sourceDiskId);
+                diskDevice.setDeviceId(destinationDiskId);
+                vm.getStaticData().getManagedDeviceMap().put(destinationDiskId, diskDevice);
+            }
+        });
+    }
+
     private Map<Guid, String> prepareImages(Collection<DiskImage> disks) {
-        Map<Guid, String> diskIdToPath = new HashMap<>();
-        for (DiskImage disk : disks) {
-            VDSReturnValue vdsRetVal = imagesHandler.prepareImage(
-                    disk.getStoragePoolId(),
-                    disk.getStorageIds().get(0),
-                    disk.getId(),
-                    disk.getImageId(),
-                    getParameters().getProxyHostId());
-            String path = ((PrepareImageReturn) vdsRetVal.getReturnValue()).getImagePath();
-            diskIdToPath.put(disk.getId(), path);
-        }
-        return diskIdToPath;
+        return disks.stream()
+                .collect(Collectors.toMap(
+                        DiskImage::getId,
+                        image -> prepareImage(image).getImagePath()));
+    }
+
+    private PrepareImageReturn prepareImage(DiskImage image) {
+        VDSReturnValue vdsRetVal = imagesHandler.prepareImage(
+                image.getStoragePoolId(),
+                image.getStorageIds().get(0),
+                image.getId(),
+                image.getImageId(),
+                getParameters().getProxyHostId());
+        return (PrepareImageReturn) vdsRetVal.getReturnValue();
+    }
+
+    private void teardownImages(Collection<DiskImage> disks) {
+        disks.forEach(this::teardownImage);
+    }
+
+    private void teardownImage(DiskImage image) {
+        imagesHandler.teardownImage(
+                image.getStoragePoolId(),
+                image.getStorageIds().get(0),
+                image.getId(),
+                image.getImageId(),
+                getParameters().getProxyHostId());
     }
 
     private void fillDiskApparentSize(Collection<DiskImage> disks) {
@@ -115,7 +159,7 @@ public class CreateOvaCommand<T extends CreateOvaParameters> extends CommandBase
                     new Pair<>("ovirt_ova_pack_ovf", genOvfParameter(ovf)),
                     new Pair<>("ovirt_ova_pack_disks", genDiskParameters(disks, diskIdToPath))
                 )
-                // /var/log/ovirt-engine/create-ova/ovirt-export-ova-ansible-{hostname}-{correlationid}-{timestamp}.log
+                // /var/log/ovirt-engine/ova/ovirt-export-ova-ansible-{hostname}-{correlationid}-{timestamp}.log
                 .logFileDirectory(CREATE_OVA_LOG_DIRECTORY)
                 .logFilePrefix("ovirt-export-ova-ansible")
                 .logFileName(getVds().getHostName())
@@ -142,12 +186,11 @@ public class CreateOvaCommand<T extends CreateOvaParameters> extends CommandBase
     }
 
     private String genDiskParameters(Collection<DiskImage> disks, Map<Guid, String> diskIdToPath) {
-        StringBuilder builder = new StringBuilder();
-        disks.forEach(disk -> {
-            String size = String.valueOf(disk.getActualSizeInBytes());
-            builder.append(String.format("%s::%s ", diskIdToPath.get(disk.getId()), size));
-        });
-        return builder.toString().trim();
+        return disks.stream()
+                .map(disk -> String.format("%s::%s",
+                        diskIdToPath.get(disk.getId()),
+                        String.valueOf(disk.getActualSizeInBytes())))
+                .collect(Collectors.joining("+"));
     }
 
     @Override

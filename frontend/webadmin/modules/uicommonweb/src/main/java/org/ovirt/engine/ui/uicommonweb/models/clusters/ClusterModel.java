@@ -1426,14 +1426,17 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
     private void initDefaultNetworkProvider() {
         AsyncDataProvider.getInstance().getAllProvidersByType(new AsyncQuery<>(result -> {
             List<Provider> providers = (List) result;
-            providers.add(0, null);
+            Provider noDefaultNetworkProvider = new Provider();
+            noDefaultNetworkProvider.setName(
+                    ConstantsManager.getInstance().getConstants().clusterNoDefaultNetworkProvider());
+
+            providers.add(0, noDefaultNetworkProvider);
             getDefaultNetworkProvider().setItems(providers);
             Cluster cluster = getEntity();
             if (cluster != null) {
                 Provider defaultNetworkProvider = providers.stream()
-                        .filter(provider -> provider != null)
-                        .filter(provider -> provider.getId().equals(cluster.getDefaultNetworkProviderId()))
-                        .findFirst().orElse(null);
+                        .filter(provider -> Objects.equals(provider.getId(), cluster.getDefaultNetworkProviderId()))
+                        .findFirst().orElse(noDefaultNetworkProvider);
                 getDefaultNetworkProvider().setSelectedItem(defaultNetworkProvider);
             }
         }), ProviderType.OPENSTACK_NETWORK, ProviderType.EXTERNAL_NETWORK);
@@ -1573,10 +1576,6 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
                 loadCurrentClusterManagementNetwork();
             }
         }));
-        // inactive KsmPolicyForNuma if KSM disabled
-        if (!getEnableKsm().getEntity()) {
-            getKsmPolicyForNumaSelection().setIsChangeable(false);
-        }
     }
 
     private void loadCurrentClusterManagementNetwork() {
@@ -1719,8 +1718,8 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
         final ArchitectureType selectedArchitecture = getArchitecture().getSelectedItem();
         final FilteredListModel.Filter<ServerCpu> filter = selectedArchitecture == null
                 || selectedArchitecture.equals(ArchitectureType.undefined)
-                ? null
-                : cpu -> selectedArchitecture.equals(cpu.getArchitecture());
+                ? cpu -> cpu == null || cpu.getLevel() > 0
+                : cpu -> cpu != null && selectedArchitecture.equals(cpu.getArchitecture()) && cpu.getLevel() > 0;
         getCPU().filterItems(filter);
     }
 
@@ -1750,6 +1749,7 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
                     }
                 }), getEntity().getId());
             } else {
+                cpus.add(0, null);
                 populateCPUList(cpus, true);
             }
         }), version);
@@ -1765,8 +1765,6 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
 
         updateFencingPolicyContent(version);
 
-        updateKSMPolicy();
-
         updateMigrateOnError();
 
         refreshMigrationPolicies();
@@ -1777,18 +1775,6 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
             initTunedProfiles();
         }
 
-    }
-
-    private void updateKSMPolicy() {
-        getEnableKsm().setIsChangeable(true);
-        getEnableKsm().setChangeProhibitionReason(ConstantsManager.getInstance().getConstants().ksmNotAvailable());
-
-        getKsmPolicyForNumaSelection().setIsAvailable(true);
-        getKsmPolicyForNumaSelection().setChangeProhibitionReason(ConstantsManager.getInstance()
-                .getConstants()
-                .ksmWithNumaAwarnessNotAvailable());
-        // enable NUMA aware KSM by default (matching kernel's default)
-        setKsmPolicyForNuma(true);
     }
 
     private void refreshAdditionalClusterFeaturesList() {
@@ -1954,7 +1940,9 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
         Collection<ArchitectureType> archsWithSupportingCpus = new HashSet<>();
         archsWithSupportingCpus.add(ArchitectureType.undefined);
         for (ServerCpu cpu: getCPU().getItems()) {
-            archsWithSupportingCpus.add(cpu.getArchitecture());
+            if (cpu != null) {
+                archsWithSupportingCpus.add(cpu.getArchitecture());
+            }
         }
         getArchitecture().setItems(archsWithSupportingCpus);
     }
@@ -2076,27 +2064,12 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
         }
     }
 
-    public boolean validate(boolean validateCpu) {
-        return validate(true, validateCpu, true);
-    }
-
-    public boolean validate(boolean validateStoragePool, boolean validateCpu, boolean validateCustomProperties) {
+    public boolean validate() {
         validateName();
 
-        if (validateStoragePool) {
-            getDataCenter().validateSelectedItem(new IValidation[] { new NotEmptyValidation() });
-        }
+        getDataCenter().validateSelectedItem(new IValidation[] { new NotEmptyValidation() });
 
-        if (validateCpu) {
-            validateCPU();
-        }
-        else {
-            getCPU().validateSelectedItem(new IValidation[] {});
-        }
-
-        if (validateCustomProperties) {
-            getCustomPropertySheet().setIsValid(getCustomPropertySheet().validate());
-        }
+        getCustomPropertySheet().setIsValid(getCustomPropertySheet().validate());
         setValidTab(TabName.CLUSTER_POLICY_TAB, getCustomPropertySheet().getIsValid());
 
         final IValidation[] versionValidations = new IValidation[] { new NotEmptyValidation() };
@@ -2178,10 +2151,6 @@ public class ClusterModel extends EntityModel<Cluster> implements HasValidatedTa
                 new NotEmptyValidation(),
                 new LengthValidation(40),
                 new I18NNameValidation() });
-    }
-
-    public void validateCPU() {
-        getCPU().validateSelectedItem(new IValidation[] { new NotEmptyValidation() });
     }
 
     private String defaultClusterRngSourcesCsv(Version ver) {
